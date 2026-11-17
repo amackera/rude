@@ -1,15 +1,19 @@
 // Terminal UI. Replies render as markdown into the scrollback. Everything else
 // a turn does (thinking, tool calls, their output) stays in a small live region
-// at the bottom that is redrawn in place. Tab cycles how much of it you see:
-// quiet → the current step → the whole transcript (full screen) → quiet.
-// Tab at an empty prompt opens the transcript too.
+// at the bottom that is redrawn in place; Tab opens the full transcript
+// (ui-transcript.ts). Terminal helpers and shared state are in ui/term.ts.
 //
 // It only watches: streamed text via stream-delta, and the rest via advice on
-// prompt, run-tool, compact and append-entry.
+// prompt, run-tool, compact and append-entry. Hooks for other extensions:
+// command/<name>, ui/tool/<name>, ui/print, ui/say, ui/live, key/<name>.
 import type { Rude, Entry } from "../core.ts";
 import { createInterface, emitKeypressEvents } from "node:readline";
-import { relative, basename } from "node:path";
-import { Markdown, wrap, fit, width, bold, dim, italic, red, green, grey, accent } from "./ui/markdown.ts";
+import { basename } from "node:path";
+import { Markdown, wrap, fit, width, red, green, grey, accent } from "./ui/markdown.ts";
+import {
+  S, tty, PAD, BOTTOM, cols, rows, textWidth, write, pad, begin, end, HIDE, SHOW, isBlank, plain, plural, elapsed,
+  rel, toText, spinner, shimmer, type Step, type ToolView,
+} from "./ui/term.ts";
 
 type Step = { id: string; title: string; body?: string; error?: boolean; use?: { name: string; input: any } };
 type Turn = {
@@ -18,47 +22,6 @@ type Turn = {
   activity: string;
   blocks: { type: string; text: string }[]; // the response being streamed
   work: { steps: Step[]; think: number; since: number }; // since the last reply text, for the summary line
-};
-
-// State lives on globalThis so a reload of this file mid-turn picks it up.
-const S = ((globalThis as any).rudeUI ??= {
-  turn: null as Turn | null,
-  text: "", // the unfinished last line of streamed reply text
-  stream: "", // type of the last delta
-  md: new Markdown(),
-  compacting: false,
-  live: 0, // rows the live region occupies on screen
-  alt: false, // the transcript is showing (alternate screen)
-  held: [] as string[], // lines printed while the transcript covered the screen
-  scroll: 0, // transcript: rows up from the bottom
-  closed: null as null | (() => void),
-  timer: null as any,
-  onKey: null as null | ((s: string, k: any) => void),
-  hooked: false,
-  blank: true, // the last line printed was blank
-  cache: new Map<string, string[]>(),
-});
-
-const tty = !!process.stdout.isTTY;
-const PAD = "  ";
-const BOTTOM = 1; // blank rows kept under the prompt and the status, off the bottom edge
-const cols = () => process.stdout.columns || 80;
-const rows = () => process.stdout.rows || 24;
-const textWidth = () => Math.max(20, Math.min(cols() - 2 * PAD.length, 100));
-const write = (s: string) => process.stdout.write(s);
-const pad = (l: string) => (l ? PAD + l : "");
-const SYNC = ["\x1b[?2026h", "\x1b[?2026l"]; // synchronized output: no tearing
-// Synchronized updates nest, so a group of prints can go to the screen as one frame.
-let syncDepth = 0;
-const begin = () => { if (!syncDepth++) write(SYNC[0]); };
-const end = () => { if (!--syncDepth) write(SYNC[1]); };
-const HIDE = "\x1b[?25l", SHOW = "\x1b[?25h";
-const plain = (l: string) => l.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
-const isBlank = (l: string) => !plain(l).trim();
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
-const elapsed = (ms: number) => {
-  const s = Math.floor(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 };
 
 // -- output -------------------------------------------------------------------
@@ -78,7 +41,7 @@ function drawLive() {
 
 function redraw() {
   if (!tty) return;
-  if (S.alt) return drawTranscript();
+  if (S.alt) return rude_.call("ui/transcript-draw");
   begin(); clearLive(); drawLive(); end();
 }
 
@@ -101,63 +64,13 @@ function print(lines: string[]) {
 
 const say = (text: string) => print(text.split("\n").map(pad));
 
-// -- the loading animation ----------------------------------------------------
-
-const truecolor = /truecolor|24bit/i.test(process.env.COLORTERM ?? "") || process.env.TERM_PROGRAM === "ghostty";
-function paint([r, g, b]: number[], s: string) {
-  if (truecolor) return `\x1b[38;2;${r | 0};${g | 0};${b | 0}m${s}\x1b[39m`;
-  const q = (v: number) => Math.round((v / 255) * 5);
-  return `\x1b[38;5;${16 + 36 * q(r) + 6 * q(g) + q(b)}m${s}\x1b[39m`;
-}
-function hue(h: number, s = 0.7, l = 0.68) {
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12;
-    return 255 * (l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1)));
-  };
-  return [f(0), f(8), f(4)];
-}
-
-// A sine wave scrolling through four braille cells (8×4 dots), its colour drifting.
-const DOT = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
-function spinner(t: number) {
-  const amp = 1.5 * (0.75 + 0.25 * Math.sin(t / 700)); // it breathes
-  const y = (x: number) => Math.round(1.5 + amp * Math.sin(x * 0.8 - t / 110));
-  let out = "";
-  for (let c = 0; c < 4; c++) {
-    let bits = 0;
-    for (let d = 0; d < 2; d++) {
-      const x = c * 2 + d, a = y(x), b = x ? y(x - 1) : a; // join to the previous column
-      for (let r = Math.min(a, b); r <= Math.max(a, b); r++) bits |= DOT[d][Math.max(0, Math.min(3, r))];
-    }
-    out += paint(hue(200 + 60 * Math.sin(t / 1500) + c * 22), String.fromCharCode(0x2800 + bits));
-  }
-  return out;
-}
-
-// A highlight sweeping across the label.
-function shimmer(text: string, t: number) {
-  const p = ((t / 45) % (text.length + 16)) - 8;
-  const tint = hue(200 + 60 * Math.sin(t / 1500), 0.5, 0.85);
-  return [...text].map((ch, i) => {
-    const k = Math.max(0, 1 - Math.abs(i - p) / 5) ** 2;
-    return paint([0, 1, 2].map((j) => 150 + (tint[j] - 150) * k), ch);
-  }).join("");
-}
-
 // -- the live region ----------------------------------------------------------
 
-// How a tool call looks comes from ui/tool/<name>, or ui/tool for tools without one.
-type ToolView = { title: string; verb?: string; lines?: string[]; quiet?: boolean };
 const has = (name: string) => !!rude_.doc(name);
-const view = (u: { name: string; input: any }): ToolView =>
-  rude_.call(has(`ui/tool/${u.name}`) ? `ui/tool/${u.name}` : "ui/tool", u.input ?? {}, u.name);
+const view = (u: { name: string; input: any }): ToolView => rude_.call("ui/tool-view", u);
 const describe = (u: { name: string; input: any }) => view(u).title;
 // One calm word for the status line; the details are a Tab away.
 const doing = (u: { name: string; input: any }) => view(u).verb ?? u.name;
-const rel = (p: string) => {
-  const r = relative(process.cwd(), p);
-  return r && !r.startsWith("..") ? r : p;
-};
 
 // The label holds for a moment before changing, so quick tool calls don't flicker.
 const HOLD = 900;
@@ -166,7 +79,7 @@ let shown = { label: "", since: 0 };
 function status() {
   const t = S.turn!, now = Date.now();
   if (t.activity !== shown.label && (now - shown.since > HOLD || !shown.label)) shown = { label: t.activity, since: now };
-  const hint = S.alt ? "" : "tab to expand";
+  const hint = S.alt ? "esc to stop" : "esc to stop · tab to expand";
   const meta = [elapsed(now - t.start), t.steps.length ? plural(t.steps.length, "step") : "", hint].filter(Boolean);
   return PAD + spinner(now) + "  " + shimmer(shown.label, now) + "  " + grey(meta.join(" · "));
 }
@@ -184,7 +97,7 @@ function liveLines() {
 }
 
 function tick() {
-  if (S.alt) drawTranscript();
+  if (S.alt) rude_.call("ui/transcript-draw");
   else redraw();
 }
 
@@ -216,14 +129,22 @@ function flushWork() {
   t.work = { steps: [], think: 0, since: 0 };
   const parts: string[] = [];
   if (think) parts.push(think < 1000 ? "thought briefly" : `thought ${elapsed(think)}`);
-  const cmds = steps.filter((s) => s.use?.name === "bash");
-  if (cmds.length === 1) parts.push(`ran ${fit(String(cmds[0].use!.input.command).trim().split("\n")[0], 48)}`);
-  else if (cmds.length) parts.push(`ran ${cmds.length} commands`);
-  const files = [...new Set(steps.filter((s) => s.use?.name === "edit").map((s) => basename(String(s.use!.input.path))))];
-  if (files.length) parts.push(`edited ${files.length > 3 ? plural(files.length, "file") : files.join(", ")}`);
-  const others = new Map<string, number>();
-  for (const s of steps) if (s.use && !["bash", "edit"].includes(s.use.name)) others.set(s.use.name, (others.get(s.use.name) ?? 0) + 1);
-  for (const [name, n] of others) parts.push(n > 1 ? `${name} ×${n}` : name);
+  // Group by what each tool view says it did ("ran bun test", "edited core.ts"); plain tool names otherwise.
+  const groups = new Map<string, { verb: string; noun: string; what: string[]; n: number }>();
+  for (const s of steps) {
+    if (!s.use) continue;
+    const did = view(s.use).did ?? { verb: s.use.name, what: "", noun: "" };
+    let g = groups.get(did.verb);
+    if (!g) groups.set(did.verb, (g = { verb: did.verb, noun: did.noun, what: [], n: 0 }));
+    g.n++;
+    if (did.what && !g.what.includes(did.what)) g.what.push(did.what);
+  }
+  for (const g of groups.values()) {
+    const list = g.what.join(", ");
+    if (!g.what.length) parts.push(g.n > 1 ? `${g.verb} ×${g.n}` : g.verb);
+    else if (g.what.length === 1) parts.push(`${g.verb} ${fit(g.what[0], 48)}`);
+    else parts.push(`${g.verb} ${g.what.length <= 3 && width(list) <= 48 ? list : plural(g.what.length, g.noun || "thing")}`);
+  }
   const failed = steps.filter((s) => s.error).length;
   if (!parts.length) return;
   print(["", PAD + grey("▸ " + parts.join(" · ")) + (failed ? grey(" · ") + red(`${failed} failed`) : "")]);
@@ -235,7 +156,7 @@ async function endTurn() {
   const t = S.turn!;
   clearInterval(S.timer);
   if (S.alt) { // they're reading; finish when they close it
-    drawTranscript();
+    rude_.call("ui/transcript-draw");
     await new Promise<void>((r) => (S.closed = r));
   }
   keys(null);
@@ -281,133 +202,8 @@ const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta ? "alt-
 
 function turnKey(_s: string, k: any) {
   const name = keyName(k);
-  if (S.alt && name !== "ctrl-c") return pagerKey(k);
+  if (S.alt && name !== "ctrl-c" && name !== "escape") return rude_.call("ui/transcript-key", k); // those two always stop the turn
   if (name && has(`key/${name}`)) rude_.call(`key/${name}`);
-}
-
-// -- the transcript -----------------------------------------------------------
-
-function openTranscript() {
-  S.alt = true; S.scroll = 0;
-  write("\x1b[?1049h\x1b[?25l");
-  drawTranscript();
-}
-
-function closeTranscript() {
-  S.alt = false;
-  write("\x1b[?1049l" + (S.turn && S.closed === null ? "" : "\x1b[?25h"));
-  const held = S.held.splice(0);
-  if (held.length) print(held); else redraw();
-  S.closed?.(); S.closed = null;
-}
-
-// ↑↓ jump a step (a message, thinking, a reply or a tool call); j k scroll a line.
-function pagerKey(k: any) {
-  if (!k) return;
-  if (["tab", "q", "escape"].includes(k.name) || (k.ctrl && k.name === "c")) return closeTranscript();
-  const page = rows() - 4;
-  const by: Record<string, number> = { k: 1, j: -1, pageup: page, b: page, pagedown: -page, space: -page, home: 1e9, g: 1e9, end: -1e9 };
-  const name = k.name === "g" && k.shift ? "end" : k.name;
-  if (name === "up" || name === "down") {
-    const { lines, steps } = transcriptLines(textWidth());
-    const max = Math.max(0, lines.length - (rows() - 3));
-    const top = max - S.scroll;
-    const to = name === "up" ? steps.findLast((i) => i < top) ?? 0 : steps.find((i) => i > top) ?? max;
-    S.scroll = max - Math.min(to, max);
-  } else if (name in by) S.scroll += by[name];
-  else return;
-  drawTranscript();
-}
-
-function drawTranscript() {
-  const w = textWidth();
-  const { lines } = transcriptLines(w);
-  const running = S.turn && S.closed === null;
-  const view = rows() - (running ? 4 : 3);
-  const max = Math.max(0, lines.length - view);
-  S.scroll = Math.max(0, Math.min(S.scroll, max));
-  const top = max - S.scroll;
-  const shown = lines.slice(top, top + view);
-  while (shown.length < view) shown.push("");
-  const where = max ? (S.scroll ? `${Math.round((top / max) * 100)}%` : "end") : "all";
-  const help = grey(`transcript · ${where} · ↑↓ steps · j k lines · pgup pgdn · g G · tab to collapse`);
-  const body = ["", ...shown, ...(running ? [status()] : [""]), PAD + help].map((l) => fit(l, cols() - 1) + "\x1b[0m\x1b[K");
-  write(SYNC[0] + "\x1b[H" + body.join("\n") + SYNC[1]);
-}
-
-function transcriptLines(w: number) {
-  const path: Entry[] = rude_.call("path");
-  const results = new Map<string, any>();
-  for (const e of path) {
-    const c = e.message?.content;
-    if (Array.isArray(c)) for (const b of c) if (b.type === "tool_result") results.set(b.tool_use_id, b);
-  }
-  const live = new Map<string, Step>((S.turn?.steps ?? []).map((s: Step) => [s.id, s]));
-  const out: string[] = [];
-  for (const e of path) {
-    const key = `${e.id}:${w}`;
-    let lines = S.cache.get(key);
-    if (!lines) {
-      let complete = true;
-      lines = entryLines(e, w, (id) => {
-        const r = results.get(id);
-        if (r) return { body: toText(r.content), error: r.is_error };
-        complete = false;
-        return live.get(id);
-      });
-      if (complete) S.cache.set(key, lines);
-    }
-    out.push(...lines);
-  }
-  // The response still streaming.
-  for (const b of S.turn?.blocks ?? []) out.push(...blockLines(b, w));
-  // Each block starts with a STEP marker line: note where, and make it blank.
-  const steps: number[] = [];
-  out.forEach((l, i) => { if (l === STEP) { out[i] = ""; steps.push(i); } });
-  return { lines: out, steps };
-}
-
-// Marks the (blank) first line of each block in the transcript, for ↑↓.
-const STEP = "\0step";
-
-const toText = (c: any) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => b.text ?? "").join("\n") : String(c));
-
-function blockLines(b: { type: string; text: string }, w: number) {
-  if (b.type === "thinking") {
-    const lines = b.text.trim().split("\n").flatMap((l) => (l.trim() ? wrap(l, w - 2) : [""]));
-    return [STEP, ...lines.map((l) => PAD + grey("┊ ") + dim(italic(l))), ""];
-  }
-  return [STEP, ...Markdown.render(b.text, w).map(pad), ""];
-}
-
-function entryLines(e: Entry, w: number, result: (id: string) => Partial<Step> | undefined): string[] {
-  if (e.type === "compaction") return [STEP, PAD + grey(`[compacted ~${Math.round(e.tokensBefore / 1000)}k tokens into a summary]`), ""];
-  if (e.type !== "message") return [];
-  const { role, content } = e.message;
-  if (typeof content === "string") {
-    return role === "user"
-      ? [STEP, ...wrap(bold(content), w, accent("› ")).map(pad), ""]
-      : blockLines({ type: "text", text: content }, w);
-  }
-  const out: string[] = [];
-  for (const b of content) {
-    if (b.type === "thinking") out.push(...blockLines({ type: "thinking", text: b.thinking }, w));
-    else if (b.type === "text" && role === "assistant") out.push(...blockLines(b, w));
-    else if (b.type === "text") out.push(...b.text.split("\n").map((l: string) => PAD + grey(l)));
-    else if (b.type === "tool_use") out.push(...toolLines(b, result(b.id), w));
-  }
-  return out;
-}
-
-function toolLines(u: any, r: Partial<Step> | undefined, w: number) {
-  const mark = !r || r.body === undefined ? accent("›") : r.error ? red("✗") : green("✓");
-  const v = view(u);
-  const out = [STEP, PAD + mark + " " + bold(v.title)];
-  const ind = PAD + "  ";
-  out.push(...(v.lines ?? []).map((l) => ind + l));
-  if (r?.body === undefined) out.push(ind + grey("running…"));
-  else if (!v.quiet || r.error) out.push(...r.body.trimEnd().split("\n").map((l) => ind + (r.error ? red(l) : grey(l))));
-  return out.map((l) => fit(l, w + PAD.length));
 }
 
 // -- the prompt ---------------------------------------------------------------
@@ -538,11 +334,17 @@ export default (rude: Rude) => {
     title: `${name} ${input.path ? rel(input.path) : ""}`.trim(),
     lines: [grey(JSON.stringify(input))],
   }), "How a tool call looks, for tools without their own ui/tool/<name>. Takes (input, name) and returns " +
-    "{ title, verb?, lines?, quiet? }: the one-line title, a word for the status line, lines shown under the title " +
-    "in the transcript, and quiet to hide a successful result.");
+    "{ title, verb?, lines?, quiet?, did? }: the one-line title, a word for the status line, lines shown under the title " +
+    "in the transcript, quiet to hide a successful result, and did ({ verb, what, noun }, e.g. ran / bun test / command) " +
+    "for the summary line after a run of tool calls.");
+  rude.def("ui/tool-view", (use: { name: string; input: any }): ToolView =>
+    rude.call(has(`ui/tool/${use.name}`) ? `ui/tool/${use.name}` : "ui/tool", use.input ?? {}, use.name),
+    "How one tool call looks: ui/tool/<name> if the tool has one, else ui/tool.");
+  rude.def("ui/status", () => status(), "The status line during a turn: animation, what it's doing, elapsed time, hints.");
+  rude.def("ui/redraw", () => redraw(), "Redraw the live region (or the transcript, if it's open).");
   rude.def("ui/tool/bash", (input: any): ToolView => {
     const [first, ...more] = String(input.command).trim().split("\n");
-    return { title: `$ ${first}`, verb: "running", lines: more.map((l) => "  " + l) };
+    return { title: `$ ${first}`, verb: "running", lines: more.map((l) => "  " + l), did: { verb: "ran", what: first, noun: "command" } };
   }, "How a bash call looks.");
   rude.def("ui/tool/edit", (input: any): ToolView => {
     const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
@@ -551,11 +353,12 @@ export default (rude: Rude) => {
       verb: "editing",
       lines: [...lines(input.old_string).map((l) => red(`- ${l}`)), ...lines(input.new_string).map((l) => green(`+ ${l}`))],
       quiet: true,
+      did: { verb: input.old_string === "" ? "created" : "edited", what: basename(String(input.path)), noun: "file" },
     };
   }, "How an edit looks: the diff, and no result unless it failed.");
 
   rude.def("key/ctrl-c", () => rude.call("cancel"), "During a turn: cancel it.");
-  rude.def("key/tab", () => openTranscript(), "During a turn: open the transcript.");
+  rude.def("key/escape", () => rude.call("cancel"), "During a turn: cancel it.");
 
   rude.def("command/help", () => {
     const cmds = rude.apropos("command/").filter((c) => c.name.startsWith("command/"));
@@ -608,7 +411,7 @@ export default (rude: Rude) => {
       if (tty) write(HIDE);
       if (line === TAB) {
         if (tty) { write("\r\x1b[K\x1b[A\x1b[K"); S.blank = true; } // drop the prompt and rule; both come back after
-        await new Promise<void>((r) => { S.closed = r; keys((_s, k) => pagerKey(k)); openTranscript(); });
+        await new Promise<void>((r) => { S.closed = r; keys((_s, k) => rude.call("ui/transcript-key", k)); rude.call("ui/transcript"); });
         keys(null);
         continue;
       }
