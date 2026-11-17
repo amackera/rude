@@ -9,7 +9,7 @@ It's a small thing for playing with and learning from, not a hardened tool. **It
 Needs [Bun](https://bun.sh) 1.3 or later and an [Anthropic API key](https://console.anthropic.com/). There are no other dependencies. Developed on macOS, in Ghostty and tmux.
 
 ```bash
-git clone <this repo> && cd rude
+git clone https://github.com/amackera/rude && cd rude
 export ANTHROPIC_API_KEY=...
 ln -s "$PWD/rude" ~/.local/bin/rude   # optional: put it on your PATH
 rude                        # interactive; Shift-Enter for a newline, Esc or Ctrl-C cancels a turn, Tab shows what it's doing
