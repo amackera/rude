@@ -162,7 +162,7 @@ def("branch", (id: string | null) => {
 }, "Move the leaf to an earlier entry. The next message starts a new branch from there.");
 
 def("close-dangling", () => {
-  const e = leaf ? entries.get(leaf) : undefined;
+  const e = (call("path") as Entry[]).findLast((x) => x.type === "message");
   const content = e?.type === "message" && e.message.role === "assistant" ? e.message.content : [];
   const uses = Array.isArray(content) ? content.filter((b: any) => b.type === "tool_use") : [];
   if (!uses.length) return;

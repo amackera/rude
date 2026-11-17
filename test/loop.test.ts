@@ -1,6 +1,6 @@
 // The loop, tools and advice, driven by a scripted model. No network.
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rude } from "../core.ts";
@@ -149,6 +149,38 @@ test("compaction summarizes old messages and keeps recent ones", async () => {
   // Stored entries were not modified by the summary request.
   expect(rude.call("entries").find((e: any) => e.message?.content === "q2")).toBeTruthy();
   rude.unadvise("build-context", "compact");
+});
+
+test("branching restores the files to that point", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "rude-snap-"));
+  const home = process.cwd();
+  process.chdir(repo);
+  try {
+    Bun.spawnSync(["git", "init", "-q"]);
+    rude.def("snapshot/git-dir", () => join(repo, "..", `${repo.split("/").pop()}-snapshots.git`));
+    await rude.load(ext("snapshot.ts"));
+    rude.def("snapshot/git-dir", () => join(repo, "..", `${repo.split("/").pop()}-snapshots.git`));
+    rude.call("new-session");
+    writeFileSync("a.txt", "v1");
+    script([
+      tool("t1", "bash", { command: "echo v2 > a.txt && echo new > b.txt" }),
+      done("changed"),
+    ]);
+    await rude.call("prompt", "change things");
+    expect(readFileSync("a.txt", "utf8")).toBe("v2\n");
+    const first = rude.call("path").find((e: any) => e.message?.content === "change things");
+    const restored = await rude.call("branch", first.id);
+    expect(restored.sort()).toEqual(["a.txt", "b.txt"]);
+    expect(readFileSync("a.txt", "utf8")).toBe("v1");
+    expect(existsSync("b.txt")).toBe(false);
+    // And forward again: the later state was snapshotted before branching away.
+    const later = rude.call("entries").findLast((e: any) => e.type === "snapshot" && e.parentId !== first.id);
+    await rude.call("branch", later.id);
+    expect(readFileSync("b.txt", "utf8")).toBe("new\n");
+  } finally {
+    process.chdir(home);
+    for (const [n, id] of [["build-context", "snapshot"], ["prompt", "snapshot"], ["branch", "snapshot"]]) rude.unadvise(n, id);
+  }
 });
 
 test("advice wraps, survives redefinition, and is replaced by id", async () => {

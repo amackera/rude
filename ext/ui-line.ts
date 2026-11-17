@@ -101,7 +101,11 @@ export default (rude: Rude) => {
     const [cmd, arg] = line.split(/\s+/);
     if (cmd === "/new") { rude.call("new-session"); out(dim("new session\n")); }
     else if (cmd === "/tree") tree();
-    else if (cmd === "/branch") { rude.call("branch", arg ?? null); out(dim(`leaf is now ${arg ?? "the root"}\n`)); }
+    else if (cmd === "/branch") {
+      const restored = await rude.call("branch", arg ?? null);
+      out(dim(`now at ${arg ?? "the root"}\n`));
+      if (Array.isArray(restored) && restored.length) out(dim(`restored files: ${restored.join(", ")}\n`));
+    }
     else if (cmd === "/compact") await rude.call("compact", line.slice(cmd.length).trim());
     else if (cmd === "/session") out(`${rude.call("session-file") ?? "(nothing written yet)"}\n`);
     else out("commands: /new  /tree  /branch <id>  /compact [instructions]  /session\n");
