@@ -4,9 +4,14 @@ A rudimentary coding agent.
 
 The entire program is a table of named functions, all of which can be replaced with `def` or wrapped with `advise`. That's the extension API. Config lives in `~/.rude/init.ts`.
 
+It's a small thing for playing with and learning from, not a hardened tool. **It runs whatever shell commands the model chooses, without asking first**, in the directory you start it in. Use it somewhere you're happy to have changed.
+
+Needs [Bun](https://bun.sh) 1.3 or later and an [Anthropic API key](https://console.anthropic.com/). There are no other dependencies. Developed on macOS, in Ghostty and tmux.
+
 ```bash
+git clone <this repo> && cd rude
 export ANTHROPIC_API_KEY=...
-ln -s "$PWD/rude" ~/.local/bin/rude   # optional
+ln -s "$PWD/rude" ~/.local/bin/rude   # optional: put it on your PATH
 rude                        # interactive; Shift-Enter for a newline, Esc or Ctrl-C cancels a turn, Tab shows what it's doing
                             # type while it works to steer it; /help lists the slash commands
 rude -p "fix the failing test"
@@ -31,3 +36,5 @@ export default (rude) => {
 ```
 
 rude knows all this too, so you can ask it to extend itself.
+
+MIT licensed; see [LICENSE](LICENSE). The emoji shortcodes come from GitHub's [gemoji](https://github.com/github/gemoji) (MIT).
