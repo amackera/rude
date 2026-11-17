@@ -1,0 +1,75 @@
+// What the status line says instead of "thinking". One is picked each time the
+// model starts thinking. Redefine ui/thinking-verbs to bring your own.
+export const VERBS = [
+  // honest work
+  "thinking", "pondering", "mulling", "considering", "deliberating", "reasoning", "musing", "ruminating",
+  "contemplating", "reflecting", "weighing", "puzzling", "figuring", "untangling", "unpacking", "decoding",
+  "deciphering", "parsing", "reading the room", "connecting dots", "noodling", "cogitating", "percolating",
+  "marinating", "simmering", "stewing", "brewing", "steeping", "fermenting", "distilling", "synthesizing",
+  "integrating", "layering", "assembling", "scaffolding", "sketching", "drafting", "outlining", "plotting",
+  "scheming", "strategizing", "triangulating", "calibrating", "tuning", "tinkering", "fiddling", "whittling",
+  "sanding", "polishing", "buffing", "chiseling", "carving", "sculpting", "forging", "smelting", "welding",
+  "soldering", "knitting", "weaving", "stitching", "darning", "braiding", "spinning", "threading", "untying",
+  // dubious work
+  "making stuff up", "winging it", "vibing", "guessing confidently", "bluffing", "improvising", "freestyling",
+  "riffing", "ad-libbing", "hand-waving", "fudging", "eyeballing", "ballparking", "approximating",
+  "rounding up", "squinting", "nodding along", "pretending to know", "faking it", "speedrunning",
+  "cutting corners", "bikeshedding", "yak shaving", "overthinking", "underthinking", "second-guessing",
+  "third-guessing", "flip-flopping", "dithering", "waffling", "hedging", "equivocating", "stalling",
+  "procrastinating", "dawdling", "lollygagging", "loitering", "moseying", "meandering", "wandering",
+  "rambling", "digressing", "monologuing", "philosophizing", "pontificating", "mansplaining to itself",
+  // violence
+  "blasting", "smashing", "crunching", "grinding", "pummeling", "hammering", "bonking", "thwacking",
+  "whacking", "walloping", "clobbering", "body-slamming", "suplexing", "headbutting", "karate chopping",
+  "roundhouse kicking", "obliterating", "annihilating", "demolishing", "bulldozing", "steamrolling",
+  "jackhammering", "detonating", "nuking", "torching", "flambéing", "yeeting", "chucking", "lobbing",
+  "slingshotting", "catapulting", "trebucheting", "railgunning", "turbocharging", "overclocking",
+  "redlining", "drag racing", "drifting", "burning rubber", "full-sending", "going ham", "going feral",
+  // feelings
+  "hating", "seething", "brooding", "sulking", "moping", "pouting", "fuming", "grumbling", "muttering",
+  "sighing", "groaning", "whining", "complaining", "kvetching", "despairing", "spiraling", "coping",
+  "seething quietly", "holding a grudge", "catastrophizing", "panicking", "panicking calmly", "sweating",
+  "perspiring", "trembling", "flinching", "wincing", "cringing", "blushing", "giggling", "cackling",
+  "chortling", "snickering", "guffawing", "beaming", "glowing", "basking", "swooning", "yearning",
+  "pining", "longing", "manifesting", "journaling", "healing", "processing", "self-actualizing",
+  // bodily
+  "fidgeting", "faceplanting", "stumbling", "tripping", "tumbling", "flailing", "wobbling", "teetering",
+  "toppling", "slipping", "sliding", "skidding", "careening", "lurching", "staggering", "shambling",
+  "shuffling", "tiptoeing", "sneaking", "skulking", "lurking", "creeping", "slithering", "scuttling",
+  "scampering", "skittering", "bounding", "leaping", "pouncing", "cartwheeling", "somersaulting",
+  "backflipping", "moonwalking", "breakdancing", "shimmying", "jiggling", "wiggling", "squirming",
+  "writhing", "stretching", "yawning", "blinking", "squinting harder", "scratching head", "chewing pencil",
+  "pacing", "drumming fingers", "cracking knuckles", "rolling up sleeves", "sharpening pencils",
+  // kitchen
+  "cooking", "baking", "frying", "sautéing", "braising", "roasting", "toasting", "grilling", "searing",
+  "poaching", "blanching", "whisking", "kneading", "proofing", "folding", "julienning", "dicing",
+  "mincing", "zesting", "garnishing", "plating", "seasoning", "salting", "tasting", "overseasoning",
+  "reducing", "deglazing", "caramelizing", "pickling", "curing", "smoking", "microwaving", "reheating",
+  // nature
+  "photosynthesizing", "germinating", "sprouting", "blooming", "pollinating", "composting", "molting",
+  "hibernating", "migrating", "burrowing", "nesting", "foraging", "grazing", "ruminating like a cow",
+  "echolocating", "metamorphosing", "evolving", "devolving", "fossilizing", "eroding", "tectonically shifting",
+  "orbiting", "gravitating", "accreting", "nebulizing", "supernovaing", "black-holing", "quantum tunneling",
+  "entangling", "collapsing wavefunctions", "superpositioning", "oscillating", "resonating", "vibrating",
+  // computer
+  "compiling", "transpiling", "linting", "refactoring", "rebasing", "cherry-picking", "force-pushing",
+  "bisecting", "grepping", "piping", "forking", "spawning", "garbage collecting", "defragmenting",
+  "buffering", "caching", "invalidating caches", "hashing", "salting hashes", "tokenizing", "embedding",
+  "backpropagating", "hallucinating", "attending", "softmaxing", "sampling", "beam searching",
+  "dereferencing", "segfaulting", "recursing", "memoizing", "currying", "monading", "type-checking",
+  "rubber-ducking", "stack-overflowing", "reading the docs", "ignoring the docs", "googling",
+  "copy-pasting", "blaming git", "consulting the oracle", "summoning daemons", "bootstrapping",
+  // occult
+  "divining", "scrying", "conjuring", "summoning", "channeling", "hexing", "enchanting", "transmuting",
+  "alchemizing", "reading tea leaves", "consulting the stars", "communing", "invoking", "levitating",
+  "astral projecting", "manifesting harder", "chanting", "incanting", "brewing potions", "shuffling tarot",
+  // other
+  "blorping", "zorbling", "flibbertigibbeting", "discombobulating", "recombobulating", "skedaddling",
+  "bamboozling", "hornswoggling", "lollygagging harder", "shenaniganing", "tomfoolering", "gallivanting",
+  "canoodling", "dillydallying", "hullabalooing", "kerfuffling", "razzle-dazzling", "befuddling",
+  "flummoxing", "galumphing", "snorkeling", "spelunking", "parkouring", "juggling", "unicycling",
+  "tightrope walking", "plate spinning", "herding cats", "boiling the ocean", "reinventing the wheel",
+  "moving fast", "breaking things", "touching grass", "doomscrolling", "lockpicking", "safecracking",
+  "heisting", "smuggling", "laundering logic", "embezzling tokens", "negotiating", "haggling",
+  "bartering", "filibustering", "gerrymandering", "lobbying", "campaigning", "recounting",
+];

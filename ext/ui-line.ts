@@ -146,14 +146,14 @@ function shimmer(text: string, t: number) {
 
 // -- the live region ----------------------------------------------------------
 
-const describe = (u: { name: string; input: any }) => {
-  if (u.name === "bash") return `$ ${String(u.input.command).trim().split("\n")[0]}`;
-  const p = u.input?.path && rel(u.input.path);
-  if (u.name === "edit") return `${u.input.old_string === "" ? "create" : "edit"} ${p}`;
-  return `${u.name} ${p ?? JSON.stringify(u.input)}`;
-};
+// How a tool call looks comes from ui/tool/<name>, or ui/tool for tools without one.
+type ToolView = { title: string; verb?: string; lines?: string[]; quiet?: boolean };
+const has = (name: string) => !!rude_.doc(name);
+const view = (u: { name: string; input: any }): ToolView =>
+  rude_.call(has(`ui/tool/${u.name}`) ? `ui/tool/${u.name}` : "ui/tool", u.input ?? {}, u.name);
+const describe = (u: { name: string; input: any }) => view(u).title;
 // One calm word for the status line; the details are a Tab away.
-const doing = (u: { name: string }) => ({ bash: "running", edit: "editing" } as Record<string, string>)[u.name] ?? u.name;
+const doing = (u: { name: string; input: any }) => view(u).verb ?? u.name;
 const rel = (p: string) => {
   const r = relative(process.cwd(), p);
   return r && !r.startsWith("..") ? r : p;
@@ -175,6 +175,8 @@ function liveLines() {
   const w = textWidth();
   const out: string[] = [];
   if (S.text && !S.compacting) out.push(...S.md.peek(S.text, w).map(pad));
+  const extra: string[] = rude_.call("ui/live", w);
+  if (extra.length) out.push("", ...extra);
   // The bottom looks like it does at the prompt: a blank, the rule, then the status where the prompt was.
   if (out.length ? !isBlank(out.at(-1)!) : !S.blank) out.push("");
   out.push(ruleLine(), status(), ...Array(BOTTOM).fill(""));
@@ -274,12 +276,13 @@ function keys(handler: typeof S.onKey) {
   process.stdin.resume();
 }
 
-let cancel = () => {};
+// A key during a turn calls key/<name>, e.g. key/tab, key/ctrl-c, key/alt-up, if it's defined.
+const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta ? "alt-" : ""}${k.shift ? "shift-" : ""}${k.name}`;
 
 function turnKey(_s: string, k: any) {
-  if (k?.ctrl && k.name === "c") return cancel();
-  if (S.alt) return pagerKey(k);
-  if (k?.name === "tab") openTranscript();
+  const name = keyName(k);
+  if (S.alt && name !== "ctrl-c") return pagerKey(k);
+  if (name && has(`key/${name}`)) rude_.call(`key/${name}`);
 }
 
 // -- the transcript -----------------------------------------------------------
@@ -398,20 +401,12 @@ function entryLines(e: Entry, w: number, result: (id: string) => Partial<Step> |
 
 function toolLines(u: any, r: Partial<Step> | undefined, w: number) {
   const mark = !r || r.body === undefined ? accent("›") : r.error ? red("✗") : green("✓");
-  const out = [STEP, PAD + mark + " " + bold(describe(u))];
+  const v = view(u);
+  const out = [STEP, PAD + mark + " " + bold(v.title)];
   const ind = PAD + "  ";
-  if (u.name === "bash") {
-    const more = String(u.input.command).trim().split("\n").slice(1);
-    out.push(...more.map((l) => ind + "  " + l));
-  } else if (u.name === "edit") {
-    const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
-    out.push(...lines(u.input.old_string).map((l) => ind + red(`- ${l}`)));
-    out.push(...lines(u.input.new_string).map((l) => ind + green(`+ ${l}`)));
-  } else {
-    out.push(ind + grey(JSON.stringify(u.input)));
-  }
+  out.push(...(v.lines ?? []).map((l) => ind + l));
   if (r?.body === undefined) out.push(ind + grey("running…"));
-  else if (u.name !== "edit" || r.error) out.push(...r.body.trimEnd().split("\n").map((l) => ind + (r.error ? red(l) : grey(l))));
+  else if (!v.quiet || r.error) out.push(...r.body.trimEnd().split("\n").map((l) => ind + (r.error ? red(l) : grey(l))));
   return out.map((l) => fit(l, w + PAD.length));
 }
 
@@ -457,7 +452,6 @@ let rude_: Rude;
 
 export default (rude: Rude) => {
   rude_ = rude;
-  cancel = () => rude.call("cancel");
   S.cache.clear();
   // Reloaded mid-turn: the turn was started by the old code, so fill in anything it didn't track.
   if (S.turn) S.turn.work ??= { steps: [], think: 0, since: 0 };
@@ -532,6 +526,41 @@ export default (rude: Rude) => {
     if (entry.type === "compaction") print(["", PAD + grey(`[compacted ~${Math.round(entry.tokensBefore / 1000)}k tokens into a summary]`)]);
     return entry;
   });
+
+  rude.def("ui/print", (lines: string[]) => print(lines),
+    "Print lines into the scrollback, above the live region. Extensions should print with this, not console.log, " +
+    "which would scribble over the live region. Lines are written as given (no margin); runs of blank lines collapse.");
+  rude.def("ui/say", (text: string) => say(text), "Print text into the scrollback, indented to the UI's margin.");
+  rude.def("ui/live", (_width: number): string[] => [],
+    "Extra lines for the live region during a turn, shown above the rule and status. Advise it to add your own.");
+
+  rude.def("ui/tool", (input: any, name: string): ToolView => ({
+    title: `${name} ${input.path ? rel(input.path) : ""}`.trim(),
+    lines: [grey(JSON.stringify(input))],
+  }), "How a tool call looks, for tools without their own ui/tool/<name>. Takes (input, name) and returns " +
+    "{ title, verb?, lines?, quiet? }: the one-line title, a word for the status line, lines shown under the title " +
+    "in the transcript, and quiet to hide a successful result.");
+  rude.def("ui/tool/bash", (input: any): ToolView => {
+    const [first, ...more] = String(input.command).trim().split("\n");
+    return { title: `$ ${first}`, verb: "running", lines: more.map((l) => "  " + l) };
+  }, "How a bash call looks.");
+  rude.def("ui/tool/edit", (input: any): ToolView => {
+    const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
+    return {
+      title: `${input.old_string === "" ? "create" : "edit"} ${rel(input.path)}`,
+      verb: "editing",
+      lines: [...lines(input.old_string).map((l) => red(`- ${l}`)), ...lines(input.new_string).map((l) => green(`+ ${l}`))],
+      quiet: true,
+    };
+  }, "How an edit looks: the diff, and no result unless it failed.");
+
+  rude.def("key/ctrl-c", () => rude.call("cancel"), "During a turn: cancel it.");
+  rude.def("key/tab", () => openTranscript(), "During a turn: open the transcript.");
+
+  rude.def("command/help", () => {
+    const cmds = rude.apropos("command/").filter((c) => c.name.startsWith("command/"));
+    print(cmds.map((c) => PAD + accent("/" + c.name.slice("command/".length).padEnd(10)) + " " + grey(c.doc.split("\n")[0])));
+  }, "List the slash commands.");
 
   rude.def("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
 
@@ -610,47 +639,12 @@ export default (rude: Rude) => {
     say(grey(`resumed ${file} (${n} entries on this branch)`));
   }
 
+  // "/name args" calls command/<name> with the rest of the line. Features define their own.
   async function command(line: string) {
-    const [cmd, arg] = line.split(/\s+/);
+    const [, name, rest = ""] = line.match(/^\/(\S+)\s*([\s\S]*)$/) ?? [];
     print([""]);
-    if (cmd === "/new") { rude.call("new-session"); say(grey("new session")); }
-    else if (cmd === "/tree") tree();
-    else if (cmd === "/branch") {
-      const restored = await rude.call("branch", arg ?? null);
-      say(grey(`now at ${arg ?? "the root"}`));
-      if (Array.isArray(restored) && restored.length) say(grey(`restored files: ${restored.join(", ")}`));
-    }
-    else if (cmd === "/compact") await rude.call("compact", line.slice(cmd.length).trim());
-    else if (cmd === "/session") say(rude.call("session-file") ?? "(nothing written yet)");
-    else say(`commands: /new  /tree  /branch <id>  /compact [instructions]  /session`);
-  }
-
-  // Print the session tree. Indent only where it branches, so long linear runs stay flat.
-  function tree() {
-    const all: Entry[] = rude.call("entries");
-    const kids = new Map<string | null, Entry[]>();
-    for (const e of all) kids.set(e.parentId, [...(kids.get(e.parentId) ?? []), e]);
-    const onPath = new Set(rude.call("path").map((e: Entry) => e.id));
-    const out: string[] = [];
-    const walk = (parent: string | null, depth: number) => {
-      const children = kids.get(parent) ?? [];
-      for (const e of children) {
-        const text = label(e);
-        if (text) out.push(`${PAD}${"  ".repeat(depth)}${onPath.has(e.id) ? accent("*") : " "} ${grey(e.id)} ${text}`);
-        walk(e.id, children.length > 1 ? depth + 1 : depth);
-      }
-    };
-    walk(null, 0);
-    print(out);
-  }
-
-  function label(e: Entry) {
-    if (e.type !== "message") return grey(`[${e.type}]`);
-    const { role, content } = e.message;
-    if (typeof content === "string") return `you: ${content.split("\n")[0].slice(0, 70)}`;
-    const text = content.find((b: any) => b.type === "text")?.text;
-    const tools = content.filter((b: any) => b.type === "tool_use").map((b: any) => b.name);
-    if (role === "assistant") return text ? `rude: ${text.split("\n")[0].slice(0, 70)}` : tools.length ? grey(`→ ${tools.join(", ")}`) : "";
-    return ""; // tool results
+    if (name && has(`command/${name}`)) return await rude.call(`command/${name}`, rest.trim());
+    say(red(`no command ${line.split(/\s/)[0]}`));
+    rude.call("command/help");
   }
 };

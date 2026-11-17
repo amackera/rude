@@ -58,6 +58,9 @@ export default (rude: Rude) => {
     return rude.call("append-entry", { type: "compaction", summary, firstKeptId, tokensBefore: estimate(messages), usage: res.usage });
   }, "Summarize the conversation so far and continue from the summary. Optional extra instructions for the summary.");
 
+  rude.def("command/compact", (instructions: string) => rude.call("compact", instructions),
+    "[instructions]  Summarize the conversation so far, to free up context.");
+
   rude.advise("build-context", "compact", async (next) => {
     const path: Entry[] = rude.call("path");
     const since = path.slice(lastCompaction(path) + 1);
