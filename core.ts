@@ -5,8 +5,8 @@
 // agent loop, calls through the table, so any function can be replaced (def)
 // or wrapped (advise) by an extension at any time. There is no other API.
 
-import { readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, existsSync, mkdirSync, openSync, writeSync, fsyncSync, closeSync, readFileSync, statSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 
 type Fn = (...args: any[]) => any;
@@ -78,20 +78,95 @@ export const rude = { def, advise, unadvise, call, doc, apropos, load };
 export type Rude = typeof rude;
 
 // -- session ------------------------------------------------------------------
-// An entry is { id, parentId, type, ... }. Entries form a tree; the leaf is
-// where the conversation currently is. Held in memory for now.
+// A session is a JSONL file: a header line, then one entry per line. An entry
+// is { id, parentId, type, ... }, so entries form a tree; the leaf is where the
+// conversation currently is. The file is only ever appended to.
 
 export type Entry = { id: string; parentId: string | null; type: string; [k: string]: any };
 
 const entries = new Map<string, Entry>();
 let leaf: string | null = null;
+let file: string | null = null; // created on the first append
+let fd: number | null = null;
+
+const newId = () => crypto.randomUUID().slice(0, 8);
+
+function writeLine(obj: object) {
+  if (fd === null) {
+    file ??= join(call("sessions-dir"), `${new Date().toISOString().replace(/[:.]/g, "-")}_${newId()}.jsonl`);
+    mkdirSync(dirname(file), { recursive: true });
+    const fresh = !existsSync(file) || statSync(file).size === 0;
+    fd = openSync(file, "a");
+    if (fresh) writeSync(fd, JSON.stringify({ type: "session", version: 1, cwd: process.cwd(), timestamp: new Date().toISOString() }) + "\n");
+    // A crash can leave half a line at the end; start ours on a fresh line.
+    else if (!readFileSync(file, "utf8").endsWith("\n")) writeSync(fd, "\n");
+  }
+  writeSync(fd, JSON.stringify(obj) + "\n");
+  fsyncSync(fd);
+}
+
+def("sessions-dir", () => join(homedir(), ".rude", "sessions", process.cwd().replace(/[/\\:]/g, "-")),
+  "Where this directory's session files live.");
+
+def("session-file", () => file, "The current session file, or null before anything is written.");
+
+def("entries", () => [...entries.values()], "Every entry in the session, all branches, in file order.");
+
+def("new-session", () => {
+  if (fd !== null) closeSync(fd);
+  entries.clear();
+  leaf = file = fd = null;
+}, "Start an empty session. Its file is created on the first append.");
+
+def("open-session", (path: string) => {
+  call("new-session");
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    let e;
+    try { e = JSON.parse(line); } catch { continue; } // blank or cut-off line
+    if (e.type === "session") continue;
+    entries.set(e.id, e);
+    leaf = e.id;
+  }
+  file = path;
+}, "Load a session file. The leaf is its last entry.");
+
+def("sessions", () => {
+  const dir = call("sessions-dir");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".jsonl")).map((f) => {
+    const path = join(dir, f);
+    const first = readFileSync(path, "utf8").split("\n").map((l) => { try { return JSON.parse(l); } catch {} })
+      .find((e) => e?.message?.role === "user" && typeof e.message.content === "string");
+    return { file: path, mtime: statSync(path).mtime, title: first?.message.content ?? "" };
+  }).sort((a, b) => +b.mtime - +a.mtime);
+}, "This directory's sessions, newest first, each with its first user message as a title.");
 
 def("append-entry", (e: Omit<Entry, "id" | "parentId">): Entry => {
-  const entry = { id: crypto.randomUUID().slice(0, 8), parentId: leaf, ...e } as Entry;
+  const entry = { id: newId(), parentId: leaf, timestamp: new Date().toISOString(), ...e } as Entry;
+  writeLine(entry);
   entries.set(entry.id, entry);
   leaf = entry.id;
   return entry;
-}, "Add an entry under the current leaf and make it the leaf. Advise this to observe everything.");
+}, "Write an entry under the current leaf and make it the leaf. Advise this to observe everything.");
+
+def("branch", (id: string | null) => {
+  if (id !== null && !entries.has(id)) throw new Error(`no entry ${id}`);
+  leaf = id;
+}, "Move the leaf to an earlier entry. The next message starts a new branch from there.");
+
+def("close-dangling", () => {
+  const e = leaf ? entries.get(leaf) : undefined;
+  const content = e?.type === "message" && e.message.role === "assistant" ? e.message.content : [];
+  const uses = Array.isArray(content) ? content.filter((b: any) => b.type === "tool_use") : [];
+  if (!uses.length) return;
+  call("append-entry", {
+    type: "message", interrupted: true,
+    message: { role: "user", content: uses.map((u: any) => ({
+      type: "tool_result", tool_use_id: u.id, is_error: true,
+      content: "Interrupted: rude stopped before this tool call finished. It may have partly run, and a command may still be running. Check before retrying.",
+    })) },
+  });
+}, "If the leaf is a tool call with no result (a crash, or a branch to it), record it as interrupted.");
 
 def("path", (id: string | null = leaf): Entry[] => {
   const out: Entry[] = [];
@@ -126,7 +201,8 @@ def("run-tool", async (use: { id: string; name: string; input: any }) => {
 }, "Run one tool call and turn its result or error into a tool_result block.");
 
 def("prompt", async (text: string) => {
-  call("append-entry", { type: "message", message: { role: "user", content: text } });
+  call("close-dangling");
+  call("append-entry",{ type: "message", message: { role: "user", content: text } });
   for (;;) {
     const res = await call("send-request", call("build-context"));
     const { content, stop_reason, usage, model } = res;

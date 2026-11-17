@@ -44,21 +44,85 @@ export default (rude: Rude) => {
   });
 
   rude.def("main", async (argv: string[]) => {
-    if (argv[0] === "-p") {
-      await rude.call("prompt", argv.slice(1).join(" "));
-      out("\n");
-      return;
-    }
     const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string) => rl.question(q);
+    const args = [...argv];
+    const flag = (...names: string[]) => {
+      const i = args.findIndex((a) => names.includes(a));
+      return i === -1 ? false : (args.splice(i, 1), true);
+    };
+
+    if (flag("-c", "--continue")) {
+      const [latest] = rude.call("sessions");
+      if (latest) open(latest.file);
+    } else if (flag("-r", "--resume")) {
+      const list = rude.call("sessions").slice(0, 20);
+      list.forEach((s: any, i: number) =>
+        out(`${String(i + 1).padStart(2)}. ${dim(s.mtime.toLocaleString())}  ${s.title.split("\n")[0].slice(0, 70)}\n`));
+      const pick = list[Number(await ask("session: ")) - 1];
+      if (pick) open(pick.file);
+    }
+
+    const p = args.indexOf("-p");
+    if (p !== -1) {
+      rl.close();
+      await rude.call("prompt", args.slice(p + 1).join(" "));
+      out("\n");
+      process.exit(0);
+    }
+
     rl.on("close", () => process.exit(0));
     for (;;) {
-      const line = (await rl.question("\n\x1b[1m›\x1b[0m ")).trim();
+      const line = (await ask("\n\x1b[1m›\x1b[0m ")).trim();
       if (!line) continue;
       try {
-        await rude.call("prompt", line);
+        if (line.startsWith("/")) command(line);
+        else await rude.call("prompt", line);
       } catch (e: any) {
         out(`\n\x1b[31m${e?.message ?? e}\x1b[0m\n`);
       }
     }
-  }, "Entry point. `rude -p <prompt>` runs one prompt and exits; otherwise an interactive loop.");
+  }, "Entry point. Flags: -c/--continue, -r/--resume, -p <prompt> (run once and exit).");
+
+  function open(file: string) {
+    rude.call("open-session", file);
+    const n = rude.call("path").length;
+    out(dim(`resumed ${file} (${n} entries on this branch)\n`));
+  }
+
+  function command(line: string) {
+    const [cmd, arg] = line.split(/\s+/);
+    if (cmd === "/new") { rude.call("new-session"); out(dim("new session\n")); }
+    else if (cmd === "/tree") tree();
+    else if (cmd === "/branch") { rude.call("branch", arg ?? null); out(dim(`leaf is now ${arg ?? "the root"}\n`)); }
+    else if (cmd === "/session") out(`${rude.call("session-file") ?? "(nothing written yet)"}\n`);
+    else out("commands: /new  /tree  /branch <id>  /session\n");
+  }
+
+  // Print the session tree. Indent only where it branches, so long linear runs stay flat.
+  function tree() {
+    const all: Entry[] = rude.call("entries");
+    const kids = new Map<string | null, Entry[]>();
+    for (const e of all) kids.set(e.parentId, [...(kids.get(e.parentId) ?? []), e]);
+    const onPath = new Set(rude.call("path").map((e: Entry) => e.id));
+    const walk = (parent: string | null, depth: number) => {
+      const children = kids.get(parent) ?? [];
+      for (const e of children) {
+        const text = label(e);
+        if (text) out(`${"  ".repeat(depth)}${onPath.has(e.id) ? "*" : " "} ${dim(e.id)} ${text}\n`);
+        walk(e.id, children.length > 1 ? depth + 1 : depth);
+      }
+    };
+    walk(null, 0);
+  }
+
+  function label(e: Entry) {
+    if (e.type !== "message") return `[${e.type}]`;
+    const { role, content } = e.message;
+    if (typeof content === "string") return `you: ${content.split("\n")[0].slice(0, 70)}`;
+    const text = content.find((b: any) => b.type === "text")?.text;
+    const tools = content.filter((b: any) => b.type === "tool_use").map((b: any) => b.name);
+    if (role === "assistant") return text ? `rude: ${text.split("\n")[0].slice(0, 70)}` : tools.length ? dim(`→ ${tools.join(", ")}`) : "";
+    return ""; // tool results
+  }
 };
