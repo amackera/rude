@@ -17,7 +17,7 @@ export function addText(messages: any[], text: string) {
 }
 
 export default (rude: Rude) => {
-  rude.def("compact/threshold", () => 200_000, "Compact before a request once the previous one's input passed this many tokens.");
+  rude.def("compact/threshold", () => 150_000, "Compact before a request once the previous one's input passed this many tokens. About 75% of a 200k window.");
   rude.def("compact/keep", () => 20_000, "About how many tokens of the most recent conversation to keep word for word.");
   rude.def("compact/prompt", () =>
     "Summarize the conversation so far so that you could continue the work from the summary alone. " +
