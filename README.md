@@ -1,13 +1,15 @@
 # rude
 
-A rudimentary coding agent, for playing with and learning from.
+A rudimentary coding agent.
 
 The program is a table of named functions. Everything, including the agent loop, calls through it, so any function can be replaced with `def` or wrapped with `advise`. That is the only extension mechanism, and `~/.rude/init.ts` is the only config.
+
+The entire program is a table of named functions, all of which can be replaced with `def` or wrapped with `advise`. That's the extension API. Config is in `~/.rude/init.ts`.
 
 ```bash
 export ANTHROPIC_API_KEY=...
 ln -s "$PWD/rude" ~/.local/bin/rude   # optional
-rude                        # interactive; Ctrl-C cancels a turn
+rude                        # interactive; Ctrl-C cancels a turn, Tab shows what it's doing
                             # /tree /branch <id> /compact /new /session
 rude -p "fix the failing test"
 rude -c                     # continue the latest session here; -r to pick one
@@ -22,7 +24,11 @@ Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and 
 
 ```ts
 export default (rude) => {
-  rude.def("anthropic/options", () => ({ model: "claude-sonnet-5-5", max_tokens: 64000, effort: "medium" }));
+  rude.def("anthropic/options", () => ({
+    model: "claude-sonnet-5-5",
+    max_tokens: 64000,
+    effort: "medium",
+  }));
 };
 ```
 
