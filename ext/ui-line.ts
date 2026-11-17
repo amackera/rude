@@ -387,10 +387,10 @@ export default (rude: Rude) => {
     "Print lines into the scrollback, above the live region. Extensions should print with this, not console.log, " +
     "which would scribble over the live region. Lines are written as given (no margin); runs of blank lines collapse.");
   rude.def("ui/say", (text: string) => say(text), "Print text into the scrollback, indented to the UI's margin.");
-  rude.def("ui/live", (_width: number): string[] => [],
+  rude.defdefault("ui/live", (_width: number): string[] => [],
     "Extra lines for the live region during a turn, shown above the rule and status. Advise it to add your own.");
 
-  rude.def("ui/tool", (input: any, name: string): ToolView => ({
+  rude.defdefault("ui/tool", (input: any, name: string): ToolView => ({
     title: `${name} ${input.path ? rel(input.path) : ""}`.trim(),
     lines: [grey(JSON.stringify(input))],
   }), "How a tool call looks, for tools without their own ui/tool/<name>. Takes (input, name) and returns " +
@@ -401,16 +401,15 @@ export default (rude: Rude) => {
     rude.call(has(`ui/tool/${use.name}`) ? `ui/tool/${use.name}` : "ui/tool", use.input ?? {}, use.name),
     "How one tool call looks: ui/tool/<name> if the tool has one, else ui/tool.");
   rude.def("ui/status", () => status(), "The status line during a turn: animation, what it's doing, elapsed time, hints.");
-  // Defaults only: an extension that loaded earlier (ext/steer.ts sorts first) may already define these.
-  if (!has("ui/next-input")) rude.def("ui/next-input", (): string | null => null,
+  rude.defdefault("ui/next-input", (): string | null => null,
     "Before showing the prompt: a message to send instead, e.g. one queued during the last turn. null shows the prompt.");
-  if (!has("ui/take-draft")) rude.def("ui/take-draft", (): string => "", "Text to put in the next prompt, e.g. typed during a turn but not sent.");
+  rude.defdefault("ui/take-draft", (): string => "", "Text to put in the next prompt, e.g. typed during a turn but not sent.");
   rude.def("ui/redraw", () => redraw(), "Redraw the live region (or the transcript, if it's open).");
-  rude.def("ui/tool/bash", (input: any): ToolView => {
+  rude.defdefault("ui/tool/bash", (input: any): ToolView => {
     const [first, ...more] = String(input.command).trim().split("\n");
     return { title: `$ ${first}`, verb: "running", lines: more.map((l) => "  " + l), did: { verb: "ran", what: first, noun: "command" } };
   }, "How a bash call looks.");
-  rude.def("ui/tool/edit", (input: any): ToolView => {
+  rude.defdefault("ui/tool/edit", (input: any): ToolView => {
     const lines = (s: string) => (s ? s.replace(/\n$/, "").split("\n") : []);
     return {
       title: `${input.old_string === "" ? "create" : "edit"} ${rel(input.path)}`,
@@ -421,15 +420,15 @@ export default (rude: Rude) => {
     };
   }, "How an edit looks: the diff, and no result unless it failed.");
 
-  rude.def("key/ctrl-c", () => rude.call("cancel"), "During a turn: cancel it.");
-  rude.def("key/escape", () => rude.call("cancel"), "During a turn: cancel it.");
+  rude.defdefault("key/ctrl-c", () => rude.call("cancel"), "During a turn: cancel it.");
+  rude.defdefault("key/escape", () => rude.call("cancel"), "During a turn: cancel it.");
 
   rude.def("command/help", () => {
     const cmds = rude.apropos("command/").filter((c) => c.name.startsWith("command/"));
     print(cmds.map((c) => PAD + accent("/" + c.name.slice("command/".length).padEnd(10)) + " " + grey(c.doc.split("\n")[0])));
   }, "List the slash commands.");
 
-  rude.def("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
+  rude.defdefault("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
 
   rude.def("main", async (argv: string[]) => {
     if (tty) process.on("exit", () => write((S.alt ? "\x1b[?1049l" : "") + "\x1b[?25h\x1b[?2004l\x1b[>4;0m"));

@@ -34,6 +34,17 @@ export function def(name: string, fn: Fn, doc = "", meta: Record<string, any> = 
   Object.assign(slot(name), { base: fn, doc, meta, file: loading || import.meta.path });
 }
 
+/**
+ * Define a function only if no other file has: for hook defaults that extensions are
+ * meant to replace. The file that owns the default can still change it on reload,
+ * so reloading it never clobbers someone else's definition. (Emacs's defvar, to def's setq.)
+ */
+export function defdefault(name: string, fn: Fn, doc = "", meta: Record<string, any> = {}) {
+  const owner = table.get(name)?.file; // "" if only advised so far
+  if (owner && owner !== (loading || import.meta.path)) return;
+  def(name, fn, doc, meta);
+}
+
 /** Wrap a function. `id` names the advice so reloading replaces it instead of stacking. */
 export function advise(name: string, id: string, around: Around) {
   slot(name).advice.set(id, around);
@@ -81,7 +92,7 @@ export async function load(file: string) {
   }
 }
 
-export const rude = { def, advise, unadvise, call, doc, apropos, load };
+export const rude = { def, defdefault, advise, unadvise, call, doc, apropos, load };
 export type Rude = typeof rude;
 
 // -- session ------------------------------------------------------------------

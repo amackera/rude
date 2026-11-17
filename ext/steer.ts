@@ -49,14 +49,15 @@ export default (rude: Rude) => {
     return next({ ...e, message: { ...e.message, content: [...c, { type: "text", text }] } });
   });
 
-  rude.def("ui/next-input", () => {
-    const msgs = st.queue.splice(0);
-    return msgs.length ? msgs.join("\n\n") : null;
-  }, "A message queued during the last turn that the model hasn't seen yet, sent next without a prompt.");
+  // Advice, not def: it survives ui-line.ts redefining its defaults on reload.
+  rude.advise("ui/next-input", "steer", (next) => {
+    const msgs = st.queue.splice(0); // queued during the last turn, not yet seen by the model
+    return msgs.length ? msgs.join("\n\n") : next();
+  });
 
-  rude.def("ui/take-draft", () => {
-    const d = st.draft;
+  rude.advise("ui/take-draft", "steer", (next) => {
+    const d = st.draft; // typed during the last turn but not queued
     st.draft = "";
-    return d;
-  }, "Text typed during the last turn but not queued, to put back in the prompt.");
+    return d || next();
+  });
 };

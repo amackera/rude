@@ -23,6 +23,7 @@ What you are: a ${core}-line TypeScript core (a table of named functions, the ag
 You can change yourself. All of rude is named functions: \`rude apropos <word>\` lists them and \`rude doc <name>\` shows one's doc and source.
 An extension is a .ts file in ./.rude/ (this project) or ~/.rude/ (everywhere) that does
   export default (rude) => { rude.def(name, fn, doc, meta); rude.advise(name, id, (next, ...args) => ...); }
+To change existing behaviour, advise it (advice survives the original file reloading; it may skip next). For a hook default others may replace, use rude.defdefault, which never overwrites another file's def.
 A tool is a function named tool/<name> with meta.schema (JSON Schema for its input). Saved extensions load before your next request.`;
   },
   "The system prompt. Keep it stable: any change invalidates the prompt cache.");

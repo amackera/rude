@@ -18,7 +18,7 @@ bun test
 
 There are only two tools: `bash` and `edit`. Sessions are stored as JSONL trees in `~/.rude/sessions/`, and every request/response is logged to `~/.rude/trace/`. Long sessions compact themselves into a summary. Inside a git repo, the files are snapshotted into a hidden repo in `~/.rude/snapshots/`, so `/branch` brings the code back too.
 
-Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, advise, unadvise, call, doc, apropos, load }`. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, and `key/<name>` handles a key during a turn. To switch model:
+Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, defdefault, advise, unadvise, call, doc, apropos, load }`. Files reload, and a reload runs every `def` again, so to change existing behaviour use `advise` (it survives redefinition, and needn't call `next`). Hook defaults use `defdefault`, which won't overwrite another file's definition. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, and `key/<name>` handles a key during a turn. To switch model:
 
 ```ts
 export default (rude) => {

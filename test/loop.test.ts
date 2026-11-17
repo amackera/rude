@@ -193,3 +193,25 @@ test("advice wraps, survives redefinition, and is replaced by id", async () => {
   expect(rude.call("greet", "you")).toBe("yo you!");
   expect(rude.apropos("greet").map((x) => x.name)).toEqual(["greet"]);
 });
+
+test("defdefault never clobbers another file's def, even when its own file reloads", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rude-ext-"));
+  const owner = join(dir, "owner.ts"), other = join(dir, "other.ts");
+  writeFileSync(owner, `export default (r) => { r.defdefault("hook", () => "default 1"); r.defdefault("own", () => "own 1"); };`);
+  writeFileSync(other, `export default (r) => { r.def("hook", () => "mine"); };`);
+  await rude.load(other);
+  await rude.load(owner);
+  expect(rude.call("hook")).toBe("mine");
+  expect(rude.call("own")).toBe("own 1");
+  // The owner changes and reloads: its own default updates, the other file's def stays.
+  writeFileSync(owner, `export default (r) => { r.defdefault("hook", () => "default 2"); r.defdefault("own", () => "own 2"); };`);
+  await rude.load(owner);
+  expect(rude.call("hook")).toBe("mine");
+  expect(rude.call("own")).toBe("own 2");
+  // Only advised so far still counts as undefined.
+  rude.advise("later", "x", (next) => next() + "!");
+  await rude.load(join(dir, "owner.ts"));
+  writeFileSync(other, `export default (r) => { r.defdefault("later", () => "base"); };`);
+  await rude.load(other);
+  expect(rude.call("later")).toBe("base!");
+});
