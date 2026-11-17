@@ -6,7 +6,9 @@ The entire program is a table of named functions, all of which can be replaced w
 
 It's a small thing for playing with and learning from, not a hardened tool. **It runs whatever shell commands the model chooses, without asking first**, in the directory you start it in. Use it somewhere you're happy to have changed.
 
-Needs [Bun](https://bun.sh) 1.3 or later and an [Anthropic API key](https://console.anthropic.com/). There are no other dependencies. Developed on macOS, in Ghostty and tmux.
+Needs [Bun](https://bun.sh) 1.3 and an [Anthropic API key](https://console.anthropic.com/). There are no other dependencies. Developed and tested on macOS, in Ghostty and tmux. Linux should work but is untested; Windows won't, since it relies on bash and Unix process groups. Newer Bun versions are untested too: Esc handling reaches into Bun's readline internals.
+
+It defaults to Claude Opus 5.5 at high effort, which adds up over long sessions. Switching to Sonnet is shown below.
 
 ```bash
 git clone https://github.com/amackera/rude && cd rude
@@ -23,7 +25,7 @@ bun test
 
 There are only two tools: `bash` and `edit`. Sessions are stored as JSONL trees in `~/.rude/sessions/`, and every request/response is logged to `~/.rude/trace/`. Long sessions compact themselves into a summary. Inside a git repo, the files are snapshotted into a hidden repo in `~/.rude/snapshots/`, so `/branch` brings the code back too.
 
-Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, defdefault, advise, unadvise, call, doc, apropos, load }`. Files reload, and a reload runs every `def` again, so to change existing behaviour use `advise` (it survives redefinition, and needn't call `next`). Hook defaults use `defdefault`, which won't overwrite another file's definition. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, and `key/<name>` handles a key during a turn. To switch model:
+Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, defdefault, advise, unadvise, call, doc, apropos, load }`. Files reload, and a reload runs every `def` again, so to change existing behaviour use `advise` (it survives redefinition, and needn't call `next`). Hook defaults use `defdefault`, which won't overwrite another file's definition. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, and `key/<name>` handles a key during a turn. To switch model, for example to the cheaper Sonnet:
 
 ```ts
 export default (rude) => {
