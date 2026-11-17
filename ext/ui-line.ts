@@ -240,7 +240,7 @@ function ask(q: string): Promise<string | null | typeof TAB> {
       input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY, history, historySize: 500,
       completer: (line: string) => {
         if (line === "" && !lines.length) { answer = TAB; setImmediate(() => rl.close()); }
-        return [[], line];
+        return lines.length ? [[], line] : completeCommand(line);
       },
     } as any);
     // Bracketed paste: the terminal marks pasted text, so a newline inside a paste
@@ -248,6 +248,25 @@ function ask(q: string): Promise<string | null | typeof TAB> {
     // Shift-Enter (and Alt-Enter) start a new line too; lines after the first get an
     // indent the width of the prompt.
     const lines: string[] = [];
+    // Tab after "/" completes a command name. Only ever one completion goes back to
+    // readline (its own list would push the rule around); candidates show in the
+    // blank row under the prompt instead, until the next key.
+    let hinted = false;
+    const hint = (text: string) => {
+      if (!tty || BOTTOM < 1 || (!text && !hinted)) return;
+      write(`\x1b7\x1b[1B\r\x1b[2K${text ? fit(PAD + text, cols() - 1) : ""}\x1b8`);
+      hinted = !!text;
+    };
+    const completeCommand = (line: string): [string[], string] => {
+      if (!/^\/\S*$/.test(line)) return [[], line];
+      const names = rude_.apropos("command/").map((c) => c.name).filter((n) => n.startsWith("command/"))
+        .map((n) => "/" + n.slice("command/".length)).filter((n) => n.startsWith(line)).sort();
+      if (names.length === 1) { hint(""); return [[names[0] + " "], line]; }
+      if (!names.length) { hint(grey(`no command starts with ${line}`)); return [[], line]; }
+      const common = names.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); });
+      hint(names.map((n) => accent(n)).join("  "));
+      return common.length > line.length ? [[common], line] : [[], line];
+    };
     const cont = " ".repeat(width(q));
     const r = rl as any, ttyWrite = r._ttyWrite;
     r._ttyWrite = function (s: string, key: any) {
@@ -261,6 +280,7 @@ function ask(q: string): Promise<string | null | typeof TAB> {
     };
     let pasting = false;
     const onKey = (_s: string, k: any) => {
+      if (hinted && k?.name !== "tab") hint("");
       if (k?.name === "paste-start") pasting = true;
       if (k?.name === "paste-end") pasting = false;
     };
@@ -425,7 +445,8 @@ export default (rude: Rude) => {
 
   rude.def("command/help", () => {
     const cmds = rude.apropos("command/").filter((c) => c.name.startsWith("command/"));
-    print(cmds.map((c) => PAD + accent("/" + c.name.slice("command/".length).padEnd(10)) + " " + grey(c.doc.split("\n")[0])));
+    print(cmds.flatMap((c) =>
+      wrap(grey(c.doc.split("\n")[0]), textWidth(), accent("/" + c.name.slice("command/".length).padEnd(10)) + " ").map(pad)));
   }, "List the slash commands.");
 
   rude.defdefault("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
