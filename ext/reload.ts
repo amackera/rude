@@ -2,6 +2,7 @@
 // No file watcher: checking modification times is simpler and also notices
 // new files and folders (like a ./.rude/ the agent just created).
 import type { Rude } from "../core.ts";
+import { addText } from "./compact.ts";
 import { statSync } from "node:fs";
 
 const mtime = (f: string) => { try { return statSync(f).mtimeMs; } catch { return 0; } };
@@ -26,11 +27,6 @@ export default (rude: Rude) => {
     const errors = await rude.call("reload-changed");
     const ctx = await next();
     // Tell the model, so it can fix an extension it just wrote.
-    if (errors.length) {
-      const last = ctx.messages.at(-1);
-      const note = { type: "text", text: `[rude] extension failed to load:\n${errors.join("\n")}` };
-      last.content = typeof last.content === "string" ? [{ type: "text", text: last.content }, note] : [...last.content, note];
-    }
-    return ctx;
+    return errors.length ? { ...ctx, messages: addText(ctx.messages, `[rude] extension failed to load:\n${errors.join("\n")}`) } : ctx;
   });
 };

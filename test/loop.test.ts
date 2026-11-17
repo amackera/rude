@@ -125,6 +125,32 @@ test("a new or changed extension file loads before the next request", async () =
   rude.unadvise("build-context", "reload");
 });
 
+test("compaction summarizes old messages and keeps recent ones", async () => {
+  await rude.load(ext("compact.ts"));
+  rude.def("compact/threshold", () => 100);
+  rude.def("compact/keep", () => 10);
+  rude.call("new-session");
+  const seen = script([
+    { ...done("a1"), usage: { input_tokens: 500 } },
+    done("SUMMARY: user said q1"),
+    done("a2"),
+  ]);
+  await rude.call("prompt", "q1");
+  await rude.call("prompt", "q2");
+  // Request 2 asked for the summary, without tools.
+  expect(seen[1].tool_choice).toEqual({ type: "none" });
+  expect(JSON.stringify(seen[1].messages.at(-1))).toContain("Summarize the conversation");
+  // Request 3 has the summary, then q2 kept word for word.
+  expect(seen[2].messages.map((m: any) => m.content)).toEqual([
+    "[Summary of the earlier conversation]\n\nSUMMARY: user said q1", "q2",
+  ]);
+  // Nothing was deleted: the full history is still in the session.
+  expect(rude.call("entries").filter((e: any) => e.type === "message").length).toBe(4);
+  // Stored entries were not modified by the summary request.
+  expect(rude.call("entries").find((e: any) => e.message?.content === "q2")).toBeTruthy();
+  rude.unadvise("build-context", "compact");
+});
+
 test("advice wraps, survives redefinition, and is replaced by id", async () => {
   rude.def("greet", (n: string) => `hi ${n}`);
   rude.advise("greet", "loud", (next, n) => next(n).toUpperCase());

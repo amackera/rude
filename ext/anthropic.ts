@@ -58,6 +58,7 @@ export default (rude: Rude) => {
       system: ctx.system,
       tools: ctx.tools,
       messages: ctx.messages,
+      ...(ctx.tool_choice && { tool_choice: ctx.tool_choice }),
       // Opus 5.5 always thinks; "summarized" streams a readable summary instead of a silent pause.
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: o.effort },

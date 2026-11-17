@@ -14,6 +14,7 @@ function preview(text: string) {
 }
 
 function show(e: Entry) {
+  if (e.type === "compaction") out(dim(`\n[compacted ~${Math.round(e.tokensBefore / 1000)}k tokens into a summary]\n`));
   if (e.type !== "message") return;
   const { role, content } = e.message;
   if (!Array.isArray(content)) return;
@@ -96,13 +97,14 @@ export default (rude: Rude) => {
     out(dim(`resumed ${file} (${n} entries on this branch)\n`));
   }
 
-  function command(line: string) {
+  async function command(line: string) {
     const [cmd, arg] = line.split(/\s+/);
     if (cmd === "/new") { rude.call("new-session"); out(dim("new session\n")); }
     else if (cmd === "/tree") tree();
     else if (cmd === "/branch") { rude.call("branch", arg ?? null); out(dim(`leaf is now ${arg ?? "the root"}\n`)); }
+    else if (cmd === "/compact") await rude.call("compact", line.slice(cmd.length).trim());
     else if (cmd === "/session") out(`${rude.call("session-file") ?? "(nothing written yet)"}\n`);
-    else out("commands: /new  /tree  /branch <id>  /session\n");
+    else out("commands: /new  /tree  /branch <id>  /compact [instructions]  /session\n");
   }
 
   // Print the session tree. Indent only where it branches, so long linear runs stay flat.
