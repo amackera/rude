@@ -1,4 +1,5 @@
 import type { Rude } from "../core.ts";
+import { join } from "node:path";
 
 const LIMIT = 30_000;
 
@@ -9,15 +10,24 @@ const clip = (s: string) =>
 // Each command runs in its own process group, so killing it kills everything it
 // started. Commands still running when rude exits are killed the same way.
 // (A kill -9 of rude can't be caught; then they carry on.)
-const running = new Set<number>();
+// This file can be reloaded, so the process-wide parts are kept on globalThis
+// and set up only once.
+const g = globalThis as any;
+const running: Set<number> = (g.rudeBashRunning ??= new Set());
 const killGroup = (pid: number) => { try { process.kill(-pid, "SIGKILL"); } catch {} };
-process.on("exit", () => running.forEach(killGroup));
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
+if (!g.rudeBashHooks) {
+  g.rudeBashHooks = true;
+  process.on("exit", () => running.forEach(killGroup));
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(sig, () => process.exit(130));
+}
+
+// Put the repo on PATH so commands can run `rude apropos` and `rude doc`.
+const env = { ...process.env, PATH: `${join(import.meta.dir, "..")}:${process.env.PATH}` };
 
 export default (rude: Rude) => {
   rude.def("tool/bash", async ({ command, timeout = 120 }: { command: string; timeout?: number }) => {
     // `exec 2>&1` merges stderr into stdout so the model sees them interleaved.
-    const p = Bun.spawn(["bash", "-c", `exec 2>&1\n${command}`], { stdin: "ignore", stdout: "pipe", detached: true });
+    const p = Bun.spawn(["bash", "-c", `exec 2>&1\n${command}`], { stdin: "ignore", stdout: "pipe", detached: true, env });
     running.add(p.pid);
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; killGroup(p.pid); }, timeout * 1000);

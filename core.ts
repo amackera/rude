@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 
 type Fn = (...args: any[]) => any;
 type Around = (next: Fn, ...args: any[]) => any;
-type Slot = { base: Fn; doc: string; meta: Record<string, any>; advice: Map<string, Around> };
+type Slot = { base: Fn; doc: string; meta: Record<string, any>; file: string; advice: Map<string, Around> };
 
 // -- the table ----------------------------------------------------------------
 
@@ -23,13 +23,15 @@ const missing = (name: string) => () => {
 
 function slot(name: string): Slot {
   let s = table.get(name);
-  if (!s) table.set(name, (s = { base: missing(name), doc: "", meta: {}, advice: new Map() }));
+  if (!s) table.set(name, (s = { base: missing(name), doc: "", meta: {}, file: "", advice: new Map() }));
   return s;
 }
 
+let loading = ""; // the extension file currently being loaded, if any
+
 /** Define (or redefine) a function. Advice on it survives redefinition. */
 export function def(name: string, fn: Fn, doc = "", meta: Record<string, any> = {}) {
-  Object.assign(slot(name), { base: fn, doc, meta });
+  Object.assign(slot(name), { base: fn, doc, meta, file: loading || import.meta.path });
 }
 
 /** Wrap a function. `id` names the advice so reloading replaces it instead of stacking. */
@@ -55,7 +57,7 @@ export function call(name: string, ...args: any[]): any {
 
 export function doc(name: string) {
   const s = table.get(name);
-  return s && { name, doc: s.doc, meta: s.meta, advice: [...s.advice.keys()] };
+  return s && { name, doc: s.doc, file: s.file, advice: [...s.advice.keys()], meta: s.meta, source: s.base.toString() };
 }
 
 /** Names (and docs) matching a substring. */
@@ -70,8 +72,13 @@ let version = 0;
 
 /** Load an extension file: its default export is called with the rude API. */
 export async function load(file: string) {
-  const mod = await import(`${file}?v=${++version}`);
-  await mod.default?.(rude);
+  loading = file;
+  try {
+    const mod = await import(`${file}?v=${++version}`);
+    await mod.default?.(rude);
+  } finally {
+    loading = "";
+  }
 }
 
 export const rude = { def, advise, unadvise, call, doc, apropos, load };
@@ -204,7 +211,7 @@ def("prompt", async (text: string) => {
   call("close-dangling");
   call("append-entry",{ type: "message", message: { role: "user", content: text } });
   for (;;) {
-    const res = await call("send-request", call("build-context"));
+    const res = await call("send-request", await call("build-context"));
     const { content, stop_reason, usage, model } = res;
     // The assistant message (with its tool calls) is logged before any tool runs.
     call("append-entry", { type: "message", message: { role: "assistant", content }, stop_reason, usage, model });

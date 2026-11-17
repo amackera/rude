@@ -1,6 +1,6 @@
 // The loop, tools and advice, driven by a scripted model. No network.
 import { test, expect } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rude } from "../core.ts";
@@ -100,6 +100,29 @@ test("branching continues from an earlier entry and keeps the old branch", async
   const texts = (es: any[]) => es.map((e) => e.message.content[0]?.text ?? e.message.content);
   expect(texts(rude.call("path"))).toEqual(["q1", "one", "q2 again", "other two"]);
   expect(rude.call("entries").length).toBe(6);
+});
+
+test("a new or changed extension file loads before the next request", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rude-ext-"));
+  const extFile = join(dir, "hello.ts");
+  rude.def("extension-files", () => [extFile]);
+  await rude.load(ext("reload.ts"));
+  const tool = (v: string) => `export default (r) => r.def("tool/hello", () => "${v}", "Say hello.", { schema: { type: "object", properties: {} } });`;
+  writeFileSync(extFile, tool("one"));
+  const seen = script([done("a"), done("b")]);
+  await rude.call("prompt", "first");
+  expect(seen[0].tools.map((t: any) => t.name)).toContain("hello");
+  expect(await rude.call("tool/hello")).toBe("one");
+  writeFileSync(extFile, tool("two"));
+  utimesSync(extFile, new Date(), new Date(Date.now() + 5000));
+  await rude.call("prompt", "second");
+  expect(await rude.call("tool/hello")).toBe("two");
+  writeFileSync(extFile, "this is not typescript (");
+  utimesSync(extFile, new Date(), new Date(Date.now() + 10000));
+  const seen2 = script([done("c")]);
+  await rude.call("prompt", "third");
+  expect(JSON.stringify(seen2[0].messages.at(-1))).toContain("extension failed to load");
+  rude.unadvise("build-context", "reload");
 });
 
 test("advice wraps, survives redefinition, and is replaced by id", async () => {
