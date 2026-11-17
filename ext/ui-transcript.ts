@@ -3,7 +3,7 @@
 // It renders from the session path plus the turn still running, and talks to the
 // line UI through named functions: ui/print, ui/redraw, ui/status, ui/tool-view.
 import type { Rude, Entry } from "../core.ts";
-import { Markdown, wrap, fit, bold, dim, italic, red, green, grey, accent } from "./ui/markdown.ts";
+import { Markdown, wrap, fit, hardWrap, bold, dim, italic, red, green, grey, accent } from "./ui/markdown.ts";
 import { S, PAD, pad, rows, cols, textWidth, write, begin, end, HIDE, SHOW, toText, type Step, type ToolView } from "./ui/term.ts";
 
 let rude_: Rude;
@@ -126,7 +126,7 @@ function toolLines(u: any, r: Partial<Step> | undefined, w: number) {
   out.push(...(v.lines ?? []).map((l) => ind + l));
   if (r?.body === undefined) out.push(ind + grey("running…"));
   else if (!v.quiet || r.error) out.push(...r.body.trimEnd().split("\n").map((l) => ind + (r.error ? red(l) : grey(l))));
-  return out.map((l) => fit(l, w + PAD.length));
+  return out.flatMap((l) => hardWrap(l, w + PAD.length, ind + "  ")); // wrapped, not cut: this is where you read it all
 }
 
 export default (rude: Rude) => {

@@ -70,6 +70,24 @@ export function wrap(s: string, w: number, first = "", rest = " ".repeat(width(f
   return lines;
 }
 
+/**
+ * Break a line at width `w` wherever it falls, keeping its spacing (for command
+ * output and code, where wrap() would squash runs of spaces). Continuation lines
+ * start with `rest`, and styles carry across the break.
+ */
+export function hardWrap(s: string, w: number, rest = ""): string[] {
+  const out: string[] = [];
+  let line = s;
+  while (width(line) > w && width(rest) < w) {
+    const [head, tail] = cut(line, w);
+    const codes = head.match(/\x1b\[[0-9;]*m/g)?.join("") ?? ""; // replaying them in order restores the style
+    out.push(head + "\x1b[0m");
+    line = rest + codes + tail;
+  }
+  out.push(line);
+  return out;
+}
+
 function inline(s: string): string {
   const held: string[] = []; // code spans, kept away from the other rules
   const hold = (x: string) => `\0${held.push(x) - 1}\0`;
@@ -95,7 +113,20 @@ export class Markdown {
       this.fence = opening ? f[1] : null;
       return opening && f[2] ? [grey(f[2])] : [];
     }
-    if (this.fence) return [grey("│ ") + code(fit(src, w - 2))];
+    if (this.fence) { // code wraps at the edge rather than being cut off
+      const out: string[] = [];
+      let rest = src;
+      do {
+        const room = Math.max(1, w - 2);
+        let [head, tail] = cut(rest, room);
+        const sp = tail ? head.lastIndexOf(" ") : -1; // break at a space if there's one late enough
+        if (sp > room / 2) [head, tail] = [head.slice(0, sp + 1), head.slice(sp + 1) + tail];
+        out.push(grey("│ ") + code(head));
+        if (!head) break;
+        rest = tail;
+      } while (rest);
+      return out;
+    }
     if (!src.trim()) return [""];
 
     let m;

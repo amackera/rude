@@ -34,9 +34,13 @@ function clearLive() {
 
 function drawLive() {
   if (!tty || !S.turn || S.alt) return;
-  const lines = liveLines().slice(-(rows() - 1)).map((l) => fit(l, cols() - 1) + "\x1b[0m");
+  let lines = liveLines();
+  // Never shorter than it was: pad above the rule instead, so the status line keeps its row
+  // rather than rising and leaving blank rows under it.
+  if (lines.length < (S.floor ?? 0)) lines = [...Array(S.floor - lines.length).fill(""), ...lines];
+  lines = lines.slice(-(rows() - 1)).map((l) => fit(l, cols() - 1) + "\x1b[0m");
   write(lines.join("\n"));
-  S.live = lines.length;
+  S.live = S.floor = lines.length;
 }
 
 function redraw() {
@@ -59,6 +63,7 @@ function print(lines: string[]) {
   if (!tty) return void write(keep.map(plain).join("\n") + "\n");
   begin(); clearLive();
   write(keep.join("\n") + "\n");
+  S.floor = Math.max(0, (S.floor ?? 0) - keep.length); // those rows now belong to the scrollback
   drawLive(); end();
 }
 
@@ -104,7 +109,7 @@ function tick() {
 function startTurn(activity: string) {
   S.turn = { start: Date.now(), steps: [], activity, blocks: [], work: { steps: [], think: 0, since: 0 } };
   shown = { label: "", since: 0 };
-  S.text = ""; S.stream = ""; S.md = new Markdown();
+  S.text = ""; S.stream = ""; S.md = new Markdown(); S.floor = 0;
   if (tty) write(HIDE);
   print([""]);
   if (tty) {
@@ -161,19 +166,21 @@ async function endTurn() {
   }
   keys(null);
   if (tty) { begin(); clearLive(); end(); } // the cursor stays hidden until the next prompt is drawn
+  S.floor = 0;
   S.turn = null;
   print(["", PAD + grey(`· ${elapsed(Date.now() - t.start)}`)]);
 }
 
 // Streamed reply text goes to the scrollback a whole line at a time.
+// S.text must never hold a newline while the live region draws it: the terminal would
+// put it on two rows, the region would count one, and the next clear would leave a ghost row.
 function pushText(s: string) {
   S.text += s;
-  let i;
-  while ((i = S.text.indexOf("\n")) !== -1) {
-    const line = S.text.slice(0, i);
-    S.text = S.text.slice(i + 1);
-    print(S.md.line(line, textWidth()).map(pad));
-  }
+  const i = S.text.lastIndexOf("\n");
+  if (i === -1) return;
+  const done = S.text.slice(0, i).split("\n");
+  S.text = S.text.slice(i + 1);
+  print(done.flatMap((line) => S.md.line(line, textWidth())).map(pad));
 }
 
 function flushText() {
@@ -193,17 +200,29 @@ function keys(handler: typeof S.onKey) {
     S.hooked = true;
     process.stdin.on("keypress", (s: string, k: any) => S.onKey?.(s, k));
   }
+  if (!S.escHooked) {
+    // Bun holds a lone Esc until the next key arrives (Node flushes it after 500ms), so
+    // Esc would do nothing. A chunk that is only ESC is the Esc key: flush it now.
+    S.escHooked = true;
+    process.stdin.on("data", (d) => {
+      if (String(d) !== "\x1b") return;
+      const sym = Object.getOwnPropertySymbols(process.stdin).find((x) => x.description === "escape-decoder");
+      (process.stdin as any)[sym!]?.next?.("");
+    });
+  }
   process.stdin.setRawMode(true);
   process.stdin.resume();
 }
 
 // A key during a turn calls key/<name>, e.g. key/tab, key/ctrl-c, key/alt-up, if it's defined.
-const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta ? "alt-" : ""}${k.shift ? "shift-" : ""}${k.name}`;
+// Bun marks a lone Esc as meta, which would make it "alt-escape".
+const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta && k.name !== "escape" ? "alt-" : ""}${k.shift ? "shift-" : ""}${k.name}`;
 
-function turnKey(_s: string, k: any) {
+function turnKey(s: string, k: any) {
   const name = keyName(k);
   if (S.alt && name !== "ctrl-c" && name !== "escape") return rude_.call("ui/transcript-key", k); // those two always stop the turn
   if (name && has(`key/${name}`)) rude_.call(`key/${name}`);
+  else if (s && !k?.ctrl && !k?.meta && [...s].length === 1 && s >= " " && has("key/char")) rude_.call("key/char", s);
 }
 
 // -- the prompt ---------------------------------------------------------------
@@ -212,19 +231,60 @@ const history: string[] = [];
 const TAB = Symbol("tab");
 
 /** Ask for a line. null means Ctrl-C or Ctrl-D; TAB means Tab on an empty line. */
+let askedRows = 0; // screen rows the last answer took, so the prompt can be taken back off
+
 function ask(q: string): Promise<string | null | typeof TAB> {
   return new Promise((resolve) => {
     let answer: string | null | typeof TAB = null;
     const rl = createInterface({
       input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY, history, historySize: 500,
       completer: (line: string) => {
-        if (line === "") { answer = TAB; setImmediate(() => rl.close()); }
+        if (line === "" && !lines.length) { answer = TAB; setImmediate(() => rl.close()); }
         return [[], line];
       },
     } as any);
+    // Bracketed paste: the terminal marks pasted text, so a newline inside a paste
+    // continues the message instead of sending it. Enter after the paste sends it all.
+    // Shift-Enter (and Alt-Enter) start a new line too; lines after the first get an
+    // indent the width of the prompt.
+    const lines: string[] = [];
+    const cont = " ".repeat(width(q));
+    const r = rl as any, ttyWrite = r._ttyWrite;
+    r._ttyWrite = function (s: string, key: any) {
+      // Shift-Enter arrives as CSI u once modifyOtherKeys is on (tmux: extended-keys); Alt-Enter as ESC CR.
+      if (!["\x1b[13;2u", "\x1b[27;2;13~", "\x1b\r"].includes(key?.sequence)) return ttyWrite.call(this, s, key);
+      lines.push(r.line);
+      r.line = ""; r.cursor = 0; r.prevRows = 0;
+      write("\r\n");
+      rl.setPrompt(cont);
+      rl.prompt(true);
+    };
+    let pasting = false;
+    const onKey = (_s: string, k: any) => {
+      if (k?.name === "paste-start") pasting = true;
+      if (k?.name === "paste-end") pasting = false;
+    };
+    process.stdin.on("keypress", onKey);
+    if (tty) write("\x1b[?2004h\x1b[>4;1m"); // bracketed paste, and modifyOtherKeys so Shift-Enter differs from Enter
     rl.on("SIGINT", () => rl.close());
-    rl.on("close", () => resolve(answer));
-    rl.question(q, (a) => { answer = a; rl.close(); });
+    rl.on("close", () => {
+      process.stdin.off("keypress", onKey);
+      if (tty) write("\x1b[?2004l\x1b[>4;0m");
+      resolve(answer);
+    });
+    rl.on("line", (l) => {
+      lines.push(l);
+      if (pasting) return;
+      answer = lines.join("\n");
+      if (lines.length > 1 && history[0] === l) history[0] = answer; // recall the whole message, not its last line
+      // Rows it took on screen: the first line follows the prompt, the rest the indent.
+      askedRows = lines.reduce((n, x, i) => n + Math.max(1, Math.ceil(width((i ? cont : q) + x) / cols())), 0);
+      rl.close();
+    });
+    rl.setPrompt(q);
+    rl.prompt();
+    const draft: string = rude_.call("ui/take-draft"); // typed during the turn but not sent
+    if (draft) rl.write(draft.replace(/\n/g, " "));
   });
 }
 
@@ -341,6 +401,10 @@ export default (rude: Rude) => {
     rude.call(has(`ui/tool/${use.name}`) ? `ui/tool/${use.name}` : "ui/tool", use.input ?? {}, use.name),
     "How one tool call looks: ui/tool/<name> if the tool has one, else ui/tool.");
   rude.def("ui/status", () => status(), "The status line during a turn: animation, what it's doing, elapsed time, hints.");
+  // Defaults only: an extension that loaded earlier (ext/steer.ts sorts first) may already define these.
+  if (!has("ui/next-input")) rude.def("ui/next-input", (): string | null => null,
+    "Before showing the prompt: a message to send instead, e.g. one queued during the last turn. null shows the prompt.");
+  if (!has("ui/take-draft")) rude.def("ui/take-draft", (): string => "", "Text to put in the next prompt, e.g. typed during a turn but not sent.");
   rude.def("ui/redraw", () => redraw(), "Redraw the live region (or the transcript, if it's open).");
   rude.def("ui/tool/bash", (input: any): ToolView => {
     const [first, ...more] = String(input.command).trim().split("\n");
@@ -368,7 +432,7 @@ export default (rude: Rude) => {
   rude.def("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
 
   rude.def("main", async (argv: string[]) => {
-    if (tty) process.on("exit", () => write((S.alt ? "\x1b[?1049l" : "") + "\x1b[?25h"));
+    if (tty) process.on("exit", () => write((S.alt ? "\x1b[?1049l" : "") + "\x1b[?25h\x1b[?2004l\x1b[>4;0m"));
     process.stdout.on("resize", () => { S.rule = null; if (S.turn) redraw(); });
     const args = [...argv];
     const flag = (...names: string[]) => {
@@ -395,7 +459,22 @@ export default (rude: Rude) => {
       process.exit(0);
     }
 
+    const run = async (text: string) => {
+      try {
+        if (text.startsWith("/")) await command(text);
+        else await rude.call("prompt", text);
+      } catch (e: any) {
+        print(["", PAD + red(String(e?.message ?? e))]);
+      }
+    };
     for (;;) {
+      // Something typed during the last turn and still waiting goes next, without a prompt.
+      const queued: string | null = rude.call("ui/next-input");
+      if (queued?.trim()) {
+        print(["", ...queued.split("\n").flatMap((l, i) => wrap(l, textWidth(), i ? "  " : accent("› "))).map(pad)]);
+        await run(queued.trim());
+        continue;
+      }
       // Rule, room underneath and prompt go out as one frame, and the cursor only shows once
       // it's in place, so it doesn't jump around on the way there.
       if (tty) { write(HIDE); begin(); }
@@ -418,21 +497,15 @@ export default (rude: Rude) => {
       if (tty) {
         // Take the rule and prompt back off the screen and print just the message, so the
         // turn's rule and status land exactly where the rule and prompt were.
-        const n = Math.max(1, Math.ceil(width(PAD + "› " + line) / cols()));
+        const n = askedRows || 1;
         begin();
         write(`\x1b[${n + 1}A\r\x1b[J`);
         S.blank = true;
-        if (line.trim()) print(wrap(line, textWidth(), accent("› ")).map(pad));
+        if (line.trim()) print(line.split("\n").flatMap((l, i) => wrap(l, textWidth(), i ? "  " : accent("› "))).map(pad));
         end();
       } else S.blank = false;
       const text = line.trim();
-      if (!text) continue;
-      try {
-        if (text.startsWith("/")) await command(text);
-        else await rude.call("prompt", text);
-      } catch (e: any) {
-        print(["", PAD + red(String(e?.message ?? e))]);
-      }
+      if (text) await run(text);
     }
   }, "Entry point. Flags: -c/--continue, -r/--resume, -p <prompt> (run once and exit).");
 
