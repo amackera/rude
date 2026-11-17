@@ -36,6 +36,12 @@ export function expandEnd(text: string): string {
   return e ? text.slice(0, text.length - m![2].length - 2) + e : text;
 }
 
+/** For an editor's typed hook: if the text before the cursor ends with a known :name:, the edit that expands it. */
+export function shortcodeEdit(before: string): { del: number; ins: string } | undefined {
+  const m = before.match(/(^|[^\w:]):([a-z0-9_+-]+):$/), e = m && EMOJI.get(m[2]);
+  return e ? { del: m![2].length + 2, ins: e } : undefined;
+}
+
 /** Names starting with prefix, shortest first. */
 export const emojiNames = (prefix: string) =>
   [...EMOJI.keys()].filter((n) => n.startsWith(prefix)).sort((a, b) => a.length - b.length || a.localeCompare(b));

@@ -10,7 +10,7 @@ import type { Rude, Entry } from "../core.ts";
 import { createInterface, emitKeypressEvents } from "node:readline";
 import { basename } from "node:path";
 import { VERBS } from "./ui/verbs.ts";
-import { EMOJI, emojiNames } from "./ui/emoji.ts";
+import { EMOJI, emojiNames, shortcodeEdit } from "./ui/emoji.ts";
 import { Editor } from "./ui/editor.ts";
 import { Markdown, wrap, fit, width, red, green, grey, accent } from "./ui/markdown.ts";
 import {
@@ -234,14 +234,12 @@ const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta && k.na
 function turnKey(s: string, k: any) {
   const whole = reassemble(s, k);
   if (whole === "swallow") return;
-  if (whole || NEWLINE_KEYS.includes(k?.sequence)) {
-    if (NEWLINE_KEYS.includes(whole ?? k.sequence) && has("key/shift-return")) rude_.call("key/shift-return");
-    return;
-  }
+  const newline = NEWLINE_KEYS.includes(whole ?? k?.sequence);
+  if (whole && !newline) return; // some other xterm-encoded key: ignore
   const name = keyName(k);
   if (S.alt && name !== "ctrl-c" && name !== "escape") return rude_.call("ui/transcript-key", k); // those two always stop the turn
-  if (name && has(`key/${name}`)) rude_.call(`key/${name}`);
-  else if (s && !k?.ctrl && !k?.meta && [...s].length === 1 && s >= " " && has("key/char")) rude_.call("key/char", s);
+  if (!newline && name && has(`key/${name}`)) rude_.call(`key/${name}`);
+  else rude_.call("ui/turn-key", s, k, newline); // anything else: typing, by default nowhere
 }
 
 // -- the prompt ---------------------------------------------------------------
@@ -296,10 +294,7 @@ function ask(q: string): Promise<string | null | typeof TAB> {
     initial: rude_.call("ui/take-draft"), // typed during the turn but not sent
     write,
     // :coffee: → ☕ as the closing colon is typed.
-    typed: (before) => {
-      const m = before.match(/(^|[^\w:]):([a-z0-9_+-]+):$/), e = m && EMOJI.get(m[2]);
-      return e ? { del: m![2].length + 2, ins: e } : undefined;
-    },
+    typed: shortcodeEdit,
     // Tab: the transcript on an empty line; otherwise complete an emoji shortcode or a /command.
     // Candidates show in the row under the input.
     tab: (before) => {
@@ -459,6 +454,8 @@ export default (rude: Rude) => {
   rude.def("ui/spinner", (t: number) => spinner(t),
     "The animation at the left of the status line, given the time in ms. Advise it to draw your own.");
   rude.def("ui/status", () => status(), "The status line during a turn: animation, what it's doing, elapsed time, hints.");
+  rude.defdefault("ui/turn-key", (_s: string, _k: any, _newline: boolean) => {},
+    "During a turn, a key no key/<name> handles: (sequence, key, isShiftEnter). ext/steer.ts types it into the steering line.");
   rude.defdefault("ui/next-input", (): string | null => null,
     "Before showing the prompt: a message to send instead, e.g. one queued during the last turn. null shows the prompt.");
   rude.defdefault("ui/take-draft", (): string => "", "Text to put in the next prompt, e.g. typed during a turn but not sent.");

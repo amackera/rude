@@ -17,7 +17,9 @@ export type EditorOpts = {
   initial?: string;
   tab?: (before: string) => Tab; // text before the cursor → an edit and/or a hint
   typed?: (before: string) => { del: number; ins: string } | void; // after each typed key, e.g. :coffee: → ☕
-  write: (s: string) => void;
+  write?: (s: string) => void; // draws itself on the terminal; without it the editor is "live":
+  redraw?: () => void; // something else draws view() (the status area during a turn) and is told to redraw
+  submit?: (text: string) => void; // Enter hands the text over and clears, instead of finishing
 };
 
 export type Result = { text: string; rows: number } | null | "transcript";
@@ -78,16 +80,30 @@ export class Editor {
     return { row: r, col: W(this.text.slice(rows[r][0], this.cursor)) };
   }
 
-  render(final = false) {
+  /** The rows as display lines, with a drawn cursor (for when the real one is hidden), then the hint if any. */
+  view(): string[] {
+    const rows = this.rows(), indent = " ".repeat(W(this.o.prompt)), { row } = this.where(rows);
+    return rows.map(([s, e], i) => {
+      let t = this.text.slice(s, e);
+      if (i === row) {
+        const at = this.cursor - s, under = this.text.slice(this.cursor, Math.min(this.next(), e));
+        t = t.slice(0, at) + "\x1b[7m" + (under || " ") + "\x1b[27m" + t.slice(at + under.length);
+      }
+      return (i ? indent : this.o.prompt) + t;
+    }).concat(this.hint ? [this.hint] : []);
+  }
+
+  render(final = false): number | undefined {
+    if (!this.o.write) return void this.o.redraw?.();
     const rows = this.rows(), indent = " ".repeat(W(this.o.prompt));
     const shown = rows.map(([s, e], i) => (i ? indent : this.o.prompt) + this.text.slice(s, e).replace(/\n$/, ""));
     const { row, col } = this.where(rows);
     let out = (this.drawnRow ? `\x1b[${this.drawnRow}A` : "") + "\r\x1b[J" + shown.join("\r\n");
     out += "\r\n" + (final ? "" : this.hint); // the row under the input: blank, or a hint
-    if (final) { this.drawnRow = rows.length; this.o.write(out + "\r"); return rows.length; }
+    if (final) { this.drawnRow = rows.length; this.o.write!(out + "\r"); return rows.length; }
     out += `\x1b[${rows.length - row}A\r` + (W(indent) + col ? `\x1b[${W(indent) + col}C` : "");
     this.drawnRow = row;
-    this.o.write(out);
+    this.o.write!(out);
     return rows.length;
   }
 
@@ -133,8 +149,13 @@ export class Editor {
     else if (name === "return" || name === "enter") {
       const text = this.text;
       if (text.trim() && this.o.history[0] !== text) this.o.history.unshift(text);
+      if (this.o.submit) { // keep going: hand it over and start a fresh line
+        if (text.trim()) this.o.submit(text);
+        this.set(""); this.hist = -1;
+        return this.render();
+      }
       this.cursor = text.length; this.hint = "";
-      const rows = this.render(true);
+      const rows = this.render(true) ?? 1;
       return this.finish({ text, rows });
     }
     else if (ctrl && name === "c") { if (!this.text) return this.finish(null); this.set(""); }

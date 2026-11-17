@@ -2,34 +2,36 @@
 // goes to the model along with the tool results, so it can change course mid-turn.
 // Whatever is still queued when the turn ends (or is stopped) is sent next.
 // Text typed but not sent goes back into the prompt.
+//
+// The steering line is the same editor as the prompt (ui/editor.ts), drawn in the
+// status area: it wraps, moves by word, recalls history, and expands :emoji:.
 import type { Rude } from "../core.ts";
 import { grey, accent, fit } from "./ui/markdown.ts";
-import { PAD, tty } from "./ui/term.ts";
-import { expandEnd } from "./ui/emoji.ts";
+import { PAD, tty, textWidth } from "./ui/term.ts";
+import { Editor } from "./ui/editor.ts";
+import { shortcodeEdit } from "./ui/emoji.ts";
 
 // On globalThis, so a reload mid-turn keeps what you've typed.
-const st = ((globalThis as any).rudeSteer ??= { draft: "", queue: [] as string[], pasting: false });
+const st = ((globalThis as any).rudeSteer ??= { queue: [] as string[] });
+st.history ??= [];
 
 export default (rude: Rude) => {
-  const redraw = () => rude.call("ui/redraw");
-  const flat = (s: string) => s.replace(/\n/g, " ⏎ "); // never a newline in the live region
+  const editor = (initial = "") => new Editor({
+    prompt: PAD + accent("› "),
+    width: () => Math.max(10, textWidth() - 2),
+    history: st.history,
+    initial,
+    typed: shortcodeEdit,
+    redraw: () => rude.call("ui/redraw"),
+    submit: (text) => { st.queue.push(text.trim()); },
+  });
+  if (st.ed && typeof st.ed.view !== "function") st.ed = null; // left over from an older version of this file
 
-  rude.def("key/char", (s: string) => {
-    st.draft += s;
-    if (s === ":" && !st.pasting) st.draft = expandEnd(st.draft); // :coffee: → ☕
-    redraw();
-  }, "During a turn: type into the steering line.");
-  rude.def("key/backspace", () => { st.draft = [...st.draft].slice(0, -1).join(""); redraw(); },
-    "During a turn: delete the last character of the steering line.");
-  rude.def("key/return", () => {
-    if (st.pasting) { st.draft += "\n"; return; } // a newline inside a paste
-    if (st.draft.trim()) st.queue.push(st.draft.trim());
-    st.draft = "";
-    redraw();
-  }, "During a turn: queue the steering line. The model sees it at the next tool call, or right after the turn.");
-  rude.def("key/shift-return", () => { st.draft += "\n"; redraw(); }, "During a turn: a new line in the steering text.");
-  rude.def("key/paste-start", () => { st.pasting = true; }, "During a turn: a paste begins.");
-  rude.def("key/paste-end", () => { st.pasting = false; redraw(); }, "During a turn: a paste ends.");
+  // Every key the turn doesn't handle itself (Esc, Ctrl-C and Tab are) goes to the steering line.
+  rude.advise("ui/turn-key", "steer", (next, s: string, k: any, newline: boolean) => {
+    (st.ed ??= editor()).key(s, k, newline);
+    next(s, k, newline);
+  });
 
   // Bracketed paste during the turn, so a pasted newline doesn't queue half a message.
   rude.advise("prompt", "steer", async (next, ...args) => {
@@ -39,8 +41,8 @@ export default (rude: Rude) => {
 
   rude.advise("ui/live", "steer", (next, w: number) => {
     const out: string[] = [...next(w)];
-    for (const q of st.queue) out.push(PAD + grey(fit(`queued › ${flat(q)}`, w)));
-    if (st.draft) out.push(PAD + accent("› ") + fit(flat(st.draft), w - 3) + "\x1b[7m \x1b[27m");
+    for (const q of st.queue) out.push(PAD + grey(fit(`queued › ${q.replace(/\n/g, " ⏎ ")}`, w)));
+    if (st.ed && (st.ed.text || st.ed.hint)) out.push(...st.ed.view());
     return out;
   });
 
@@ -62,8 +64,8 @@ export default (rude: Rude) => {
   });
 
   rude.advise("ui/take-draft", "steer", (next) => {
-    const d = st.draft; // typed during the last turn but not queued
-    st.draft = "";
+    const d = st.ed?.text ?? ""; // typed during the last turn but not queued
+    st.ed = null;
     return d || next();
   });
 };
