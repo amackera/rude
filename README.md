@@ -2,6 +2,8 @@
 
 A rudimentary coding agent.
 
+![rude explaining what it is, then writing itself an extension that swaps its loading animation for a bouncing coffee cup](docs/demo.gif)
+
 The entire program is a table of named functions, all of which can be replaced with `def` or wrapped with `advise`. That's the extension API. Config lives in `~/.rude/init.ts`.
 
 It's a small thing for playing with and learning from, not a hardened tool. **It runs whatever shell commands the model chooses, without asking first**, in the directory you start it in. Use it somewhere you're happy to have changed.
@@ -25,7 +27,7 @@ bun test
 
 There are only two tools: `bash` and `edit`. Sessions are stored as JSONL trees in `~/.rude/sessions/`, and every request/response is logged to `~/.rude/trace/`. Long sessions compact themselves into a summary. Inside a git repo, the files are snapshotted into a hidden repo in `~/.rude/snapshots/`, so `/branch` brings the code back too.
 
-Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, defdefault, advise, unadvise, call, doc, apropos, load }`. Files reload, and a reload runs every `def` again, so to change existing behaviour use `advise` (it survives redefinition, and needn't call `next`). Hook defaults use `defdefault`, which won't overwrite another file's definition. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, and `key/<name>` handles a key during a turn. To switch model, for example to the cheaper Sonnet:
+Extensions load in order from `ext/`, `~/.rude/init.ts` and `./.rude/*.ts`, and a new or changed file is reloaded before the next model request. Each one default-exports a function that receives `{ def, defdefault, advise, unadvise, call, doc, apropos, load }`. Files reload, and a reload runs every `def` again, so to change existing behaviour use `advise` (it survives redefinition, and needn't call `next`). Hook defaults use `defdefault`, which won't overwrite another file's definition. A tool is a function named `tool/<name>` with a JSON Schema in `meta.schema`. The terminal UI has the same kind of hooks: `/name` calls `command/<name>`, `ui/tool/<name>` sets how a tool call looks, `ui/say` prints, `ui/live` adds lines to the status area, `key/<name>` handles a key during a turn (`ui/turn-key` gets the rest), and `ui/thinking-verbs` is what the status line says while the model thinks. To switch model, for example to the cheaper Sonnet:
 
 ```ts
 export default (rude) => {

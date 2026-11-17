@@ -18,15 +18,6 @@ import {
   rel, toText, spinner, shimmer, type Step, type ToolView,
 } from "./ui/term.ts";
 
-type Step = { id: string; title: string; body?: string; error?: boolean; use?: { name: string; input: any } };
-type Turn = {
-  start: number;
-  steps: Step[];
-  activity: string;
-  blocks: { type: string; text: string }[]; // the response being streamed
-  work: { steps: Step[]; think: number; since: number }; // since the last reply text, for the summary line
-};
-
 // -- output -------------------------------------------------------------------
 
 function clearLive() {

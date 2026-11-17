@@ -164,7 +164,7 @@ export class Editor {
       const t = this.o.tab?.(this.text.slice(0, this.cursor));
       if (t === "transcript") return this.finish("transcript");
       if (t && "del" in t) { this.set(this.text.slice(0, this.cursor - t.del) + t.ins + this.text.slice(this.cursor), this.cursor - t.del + t.ins.length); }
-      this.hint = t?.hint ?? "";
+      this.hint = (t && t.hint) || "";
       if (!t && !hadHint) return;
     }
     else if (name === "backspace" && (meta || ctrl)) { const w = this.wordLeft(); this.set(this.text.slice(0, w) + this.text.slice(this.cursor), w); }

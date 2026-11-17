@@ -160,7 +160,7 @@ def("sessions", () => {
 }, "This directory's sessions, newest first, each with its first user message as a title.");
 
 def("append-entry", (e: Omit<Entry, "id" | "parentId">): Entry => {
-  const entry = { id: newId(), parentId: leaf, timestamp: new Date().toISOString(), ...e } as Entry;
+  const entry = { id: newId(), parentId: leaf, timestamp: new Date().toISOString(), ...e } as unknown as Entry;
   writeLine(entry);
   entries.set(entry.id, entry);
   leaf = entry.id;
