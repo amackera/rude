@@ -207,22 +207,42 @@ def("run-tool", async (use: { id: string; name: string; input: any }) => {
   }
 }, "Run one tool call and turn its result or error into a tool_result block.");
 
+let turn: AbortController | null = null;
+
+def("signal", () => turn?.signal, "The running turn's AbortSignal. Providers and tools should stop when it fires.");
+def("cancel", () => turn?.abort(), "Cancel the running turn.");
+
+const cancelled = () => new Error("cancelled");
+
 def("prompt", async (text: string) => {
   call("close-dangling");
-  call("append-entry",{ type: "message", message: { role: "user", content: text } });
-  for (;;) {
-    const res = await call("send-request", await call("build-context"));
-    const { content, stop_reason, usage, model } = res;
-    // The assistant message (with its tool calls) is logged before any tool runs.
-    call("append-entry", { type: "message", message: { role: "assistant", content }, stop_reason, usage, model });
-    const uses = content.filter((b: any) => b.type === "tool_use");
-    if (stop_reason !== "tool_use" || uses.length === 0) return res;
-    // One at a time, in order: a reply can hold an edit followed by a test run.
-    const results = [];
-    for (const u of uses) results.push(await call("run-tool", u));
-    call("append-entry", { type: "message", message: { role: "user", content: results } });
+  call("append-entry", { type: "message", message: { role: "user", content: text } });
+  const signal = (turn = new AbortController()).signal;
+  try {
+    for (;;) {
+      const res = await call("send-request", await call("build-context"));
+      if (signal.aborted) throw cancelled();
+      const { content, stop_reason, usage, model } = res;
+      // The assistant message (with its tool calls) is logged before any tool runs.
+      call("append-entry", { type: "message", message: { role: "assistant", content }, stop_reason, usage, model });
+      const uses = content.filter((b: any) => b.type === "tool_use");
+      if (stop_reason !== "tool_use" || uses.length === 0) return res;
+      // One at a time, in order: a reply can hold an edit followed by a test run.
+      const results = [];
+      for (const u of uses) {
+        results.push(signal.aborted
+          ? { type: "tool_result", tool_use_id: u.id, content: "Cancelled by the user before it ran.", is_error: true }
+          : await call("run-tool", u));
+      }
+      call("append-entry", { type: "message", message: { role: "user", content: results } });
+      if (signal.aborted) throw cancelled();
+    }
+  } catch (e: any) {
+    throw signal.aborted ? cancelled() : e; // an aborted fetch throws its own error
+  } finally {
+    turn = null;
   }
-}, "Send a user message and loop: request, run tool calls, repeat until the model stops.");
+}, "Send a user message and loop: request, run tool calls, repeat until the model stops. Throws \"cancelled\" on cancel.");
 
 // -- boot ---------------------------------------------------------------------
 

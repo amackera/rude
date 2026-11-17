@@ -83,8 +83,12 @@ export default (rude: Rude) => {
             "anthropic-beta": "server-side-fallback-2026-07-01",
           },
           body,
+          signal: rude.call("signal"),
         });
-      } catch (e) { err = e; }
+      } catch (e) {
+        if (rude.call("signal")?.aborted) throw e; // cancelled, don't retry
+        err = e;
+      }
       if (res?.ok) return collect(sse(res.body!), (d) => rude.call("stream-delta", d));
       const retryable = err || RETRY.has(res!.status);
       if (!retryable || attempt >= 4) throw new Error(err ? String(err) : `anthropic: HTTP ${res!.status}: ${await res!.text()}`);

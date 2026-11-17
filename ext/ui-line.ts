@@ -71,15 +71,21 @@ export default (rude: Rude) => {
       process.exit(0);
     }
 
+    // Ctrl-C cancels the running turn; at the prompt it quits.
+    let busy = false;
+    rl.on("SIGINT", () => (busy ? rude.call("cancel") : rl.close()));
     rl.on("close", () => process.exit(0));
     for (;;) {
       const line = (await ask("\n\x1b[1m›\x1b[0m ")).trim();
       if (!line) continue;
+      busy = true;
       try {
-        if (line.startsWith("/")) command(line);
+        if (line.startsWith("/")) await command(line);
         else await rude.call("prompt", line);
       } catch (e: any) {
         out(`\n\x1b[31m${e?.message ?? e}\x1b[0m\n`);
+      } finally {
+        busy = false;
       }
     }
   }, "Entry point. Flags: -c/--continue, -r/--resume, -p <prompt> (run once and exit).");

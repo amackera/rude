@@ -31,11 +31,17 @@ export default (rude: Rude) => {
     running.add(p.pid);
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; killGroup(p.pid); }, timeout * 1000);
+    const signal: AbortSignal | undefined = rude.call("signal");
+    const onCancel = () => killGroup(p.pid);
+    signal?.addEventListener("abort", onCancel);
     const out = await new Response(p.stdout).text();
     await p.exited;
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onCancel);
     running.delete(p.pid);
-    const status = timedOut ? `killed after ${timeout}s timeout` : p.signalCode ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
+    const status = timedOut ? `killed after ${timeout}s timeout`
+      : signal?.aborted ? "cancelled by the user"
+      : p.signalCode ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
     return `${clip(out)}\n[${status}]`;
   },
   "Run a bash command in the working directory. Returns combined stdout and stderr plus the exit status. " +
