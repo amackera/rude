@@ -5,6 +5,7 @@
 import type { Rude } from "../core.ts";
 import { grey, accent, fit } from "./ui/markdown.ts";
 import { PAD, tty } from "./ui/term.ts";
+import { expandEnd } from "./ui/emoji.ts";
 
 // On globalThis, so a reload mid-turn keeps what you've typed.
 const st = ((globalThis as any).rudeSteer ??= { draft: "", queue: [] as string[], pasting: false });
@@ -13,7 +14,11 @@ export default (rude: Rude) => {
   const redraw = () => rude.call("ui/redraw");
   const flat = (s: string) => s.replace(/\n/g, " ⏎ "); // never a newline in the live region
 
-  rude.def("key/char", (s: string) => { st.draft += s; redraw(); }, "During a turn: type into the steering line.");
+  rude.def("key/char", (s: string) => {
+    st.draft += s;
+    if (s === ":" && !st.pasting) st.draft = expandEnd(st.draft); // :coffee: → ☕
+    redraw();
+  }, "During a turn: type into the steering line.");
   rude.def("key/backspace", () => { st.draft = [...st.draft].slice(0, -1).join(""); redraw(); },
     "During a turn: delete the last character of the steering line.");
   rude.def("key/return", () => {
@@ -22,6 +27,7 @@ export default (rude: Rude) => {
     st.draft = "";
     redraw();
   }, "During a turn: queue the steering line. The model sees it at the next tool call, or right after the turn.");
+  rude.def("key/shift-return", () => { st.draft += "\n"; redraw(); }, "During a turn: a new line in the steering text.");
   rude.def("key/paste-start", () => { st.pasting = true; }, "During a turn: a paste begins.");
   rude.def("key/paste-end", () => { st.pasting = false; redraw(); }, "During a turn: a paste ends.");
 

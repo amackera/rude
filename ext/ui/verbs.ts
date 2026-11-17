@@ -1,5 +1,5 @@
 // What the status line says instead of "thinking". One is picked each time the
-// model starts thinking. Redefine ui/thinking-verbs to bring your own.
+// model starts thinking. Advise ui/thinking-verbs to add your own or replace them.
 export const VERBS = [
   // honest work
   "thinking", "pondering", "mulling", "considering", "deliberating", "reasoning", "musing", "ruminating",

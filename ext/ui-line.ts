@@ -9,6 +9,9 @@
 import type { Rude, Entry } from "../core.ts";
 import { createInterface, emitKeypressEvents } from "node:readline";
 import { basename } from "node:path";
+import { VERBS } from "./ui/verbs.ts";
+import { EMOJI, emojiNames } from "./ui/emoji.ts";
+import { Editor } from "./ui/editor.ts";
 import { Markdown, wrap, fit, width, red, green, grey, accent } from "./ui/markdown.ts";
 import {
   S, tty, PAD, BOTTOM, cols, rows, textWidth, write, pad, begin, end, HIDE, SHOW, isBlank, plain, plural, elapsed,
@@ -80,13 +83,21 @@ const doing = (u: { name: string; input: any }) => view(u).verb ?? u.name;
 // The label holds for a moment before changing, so quick tool calls don't flicker.
 const HOLD = 900;
 let shown = { label: "", since: 0 };
+// "thinking" shows as a verb from ui/thinking-verbs, a new one each stretch of thinking.
+let verb = "";
+const pick = () => {
+  const vs: string[] = rude_.call("ui/thinking-verbs");
+  return vs.length ? vs[Math.floor(Math.random() * vs.length)] : "thinking";
+};
 
 function status() {
   const t = S.turn!, now = Date.now();
-  if (t.activity !== shown.label && (now - shown.since > HOLD || !shown.label)) shown = { label: t.activity, since: now };
+  if (t.activity !== "thinking") verb = "";
+  const label = t.activity === "thinking" ? (verb ||= pick()) : t.activity;
+  if (label !== shown.label && (now - shown.since > HOLD || !shown.label)) shown = { label, since: now };
   const hint = S.alt ? "esc to stop" : "esc to stop · tab to expand";
   const meta = [elapsed(now - t.start), t.steps.length ? plural(t.steps.length, "step") : "", hint].filter(Boolean);
-  return PAD + spinner(now) + "  " + shimmer(shown.label, now) + "  " + grey(meta.join(" · "));
+  return PAD + rude_.call("ui/spinner", now) + "  " + shimmer(shown.label, now) + "  " + grey(meta.join(" · "));
 }
 
 function liveLines() {
@@ -97,7 +108,7 @@ function liveLines() {
   if (extra.length) out.push("", ...extra);
   // The bottom looks like it does at the prompt: a blank, the rule, then the status where the prompt was.
   if (out.length ? !isBlank(out.at(-1)!) : !S.blank) out.push("");
-  out.push(ruleLine(), status(), ...Array(BOTTOM).fill(""));
+  out.push(ruleLine(), rude_.call("ui/status"), ...Array(BOTTOM).fill(""));
   return out;
 }
 
@@ -184,9 +195,11 @@ function pushText(s: string) {
 }
 
 function flushText() {
-  if (S.text) print(S.md.line(S.text, textWidth()).map(pad));
+  // Clear S.text before printing: print redraws the live region, which would draw it a second time.
+  const text = S.text, md = S.md;
   S.text = "";
   S.md = new Markdown();
+  if (text) print(md.line(text, textWidth()).map(pad));
 }
 
 // -- keys ---------------------------------------------------------------------
@@ -219,6 +232,12 @@ function keys(handler: typeof S.onKey) {
 const keyName = (k: any) => k?.name && `${k.ctrl ? "ctrl-" : ""}${k.meta && k.name !== "escape" ? "alt-" : ""}${k.shift ? "shift-" : ""}${k.name}`;
 
 function turnKey(s: string, k: any) {
+  const whole = reassemble(s, k);
+  if (whole === "swallow") return;
+  if (whole || NEWLINE_KEYS.includes(k?.sequence)) {
+    if (NEWLINE_KEYS.includes(whole ?? k.sequence) && has("key/shift-return")) rude_.call("key/shift-return");
+    return;
+  }
   const name = keyName(k);
   if (S.alt && name !== "ctrl-c" && name !== "escape") return rude_.call("ui/transcript-key", k); // those two always stop the turn
   if (name && has(`key/${name}`)) rude_.call(`key/${name}`);
@@ -231,80 +250,97 @@ const history: string[] = [];
 const TAB = Symbol("tab");
 
 /** Ask for a line. null means Ctrl-C or Ctrl-D; TAB means Tab on an empty line. */
+// Shift-Enter: Ghostty (and others) send CSI 27;2;13~ by default, but under modifyOtherKeys
+// Ghostty sends nothing at all. tmux sends a plain CR unless the app asks for modifyOtherKeys,
+// then CSI 13;2u. So ask only inside tmux.
+const NEWLINE_KEYS = ["\x1b[13;2u", "\x1b[27;2;13~", "\x1b\r"]; // Shift-Enter (CSI u, xterm), Alt-Enter
+
+// Bun's key decoder only knows two-number sequences, so xterm's CSI 27;<mod>;<code>~
+// (Ghostty's Shift-Enter) arrives as "ESC[27;2;" then "1", "3", "~". Put it back together.
+// Returns "swallow" for the pieces, the whole sequence at the end, or null for other keys.
+let csi27: string | null = null;
+function reassemble(s: string, k: any): string | "swallow" | null {
+  if (csi27 !== null) {
+    csi27 += k?.sequence ?? s ?? "";
+    if (!csi27.endsWith("~") && csi27.length < 12) return "swallow";
+    const whole = "\x1b[27;" + csi27;
+    csi27 = null;
+    return whole;
+  }
+  const m = k?.sequence?.match(/^\x1b\[27;(\d+);$/);
+  if (m) { csi27 = m[1] + ";"; return "swallow"; }
+  return null;
+}
+
+const MOK_ON = process.env.TMUX ? "\x1b[>4;1m" : "";
+const MOK_OFF = process.env.TMUX ? "\x1b[>4;0m" : "";
+
 let askedRows = 0; // screen rows the last answer took, so the prompt can be taken back off
 
+let editing: Editor | null = null; // the prompt being edited, so a resize can redraw it
+
+/** Ask for a line. null means Ctrl-C or Ctrl-D on an empty line; TAB means Tab on an empty line. */
 function ask(q: string): Promise<string | null | typeof TAB> {
-  return new Promise((resolve) => {
-    let answer: string | null | typeof TAB = null;
-    const rl = createInterface({
-      input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY, history, historySize: 500,
-      completer: (line: string) => {
-        if (line === "" && !lines.length) { answer = TAB; setImmediate(() => rl.close()); }
-        return lines.length ? [[], line] : completeCommand(line);
-      },
-    } as any);
-    // Bracketed paste: the terminal marks pasted text, so a newline inside a paste
-    // continues the message instead of sending it. Enter after the paste sends it all.
-    // Shift-Enter (and Alt-Enter) start a new line too; lines after the first get an
-    // indent the width of the prompt.
-    const lines: string[] = [];
-    // Tab after "/" completes a command name. Only ever one completion goes back to
-    // readline (its own list would push the rule around); candidates show in the
-    // blank row under the prompt instead, until the next key.
-    let hinted = false;
-    const hint = (text: string) => {
-      if (!tty || BOTTOM < 1 || (!text && !hinted)) return;
-      write(`\x1b7\x1b[1B\r\x1b[2K${text ? fit(PAD + text, cols() - 1) : ""}\x1b8`);
-      hinted = !!text;
-    };
-    const completeCommand = (line: string): [string[], string] => {
-      if (!/^\/\S*$/.test(line)) return [[], line];
-      const names = rude_.apropos("command/").map((c) => c.name).filter((n) => n.startsWith("command/"))
-        .map((n) => "/" + n.slice("command/".length)).filter((n) => n.startsWith(line)).sort();
-      if (names.length === 1) { hint(""); return [[names[0] + " "], line]; }
-      if (!names.length) { hint(grey(`no command starts with ${line}`)); return [[], line]; }
-      const common = names.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); });
-      hint(names.map((n) => accent(n)).join("  "));
-      return common.length > line.length ? [[common], line] : [[], line];
-    };
-    const cont = " ".repeat(width(q));
-    const r = rl as any, ttyWrite = r._ttyWrite;
-    r._ttyWrite = function (s: string, key: any) {
-      // Shift-Enter arrives as CSI u once modifyOtherKeys is on (tmux: extended-keys); Alt-Enter as ESC CR.
-      if (!["\x1b[13;2u", "\x1b[27;2;13~", "\x1b\r"].includes(key?.sequence)) return ttyWrite.call(this, s, key);
-      lines.push(r.line);
-      r.line = ""; r.cursor = 0; r.prevRows = 0;
-      write("\r\n");
-      rl.setPrompt(cont);
-      rl.prompt(true);
-    };
-    let pasting = false;
-    const onKey = (_s: string, k: any) => {
-      if (hinted && k?.name !== "tab") hint("");
-      if (k?.name === "paste-start") pasting = true;
-      if (k?.name === "paste-end") pasting = false;
-    };
-    process.stdin.on("keypress", onKey);
-    if (tty) write("\x1b[?2004h\x1b[>4;1m"); // bracketed paste, and modifyOtherKeys so Shift-Enter differs from Enter
-    rl.on("SIGINT", () => rl.close());
-    rl.on("close", () => {
-      process.stdin.off("keypress", onKey);
-      if (tty) write("\x1b[?2004l\x1b[>4;0m");
-      resolve(answer);
-    });
-    rl.on("line", (l) => {
-      lines.push(l);
-      if (pasting) return;
-      answer = lines.join("\n");
-      if (lines.length > 1 && history[0] === l) history[0] = answer; // recall the whole message, not its last line
-      // Rows it took on screen: the first line follows the prompt, the rest the indent.
-      askedRows = lines.reduce((n, x, i) => n + Math.max(1, Math.ceil(width((i ? cont : q) + x) / cols())), 0);
-      rl.close();
-    });
-    rl.setPrompt(q);
-    rl.prompt();
-    const draft: string = rude_.call("ui/take-draft"); // typed during the turn but not sent
-    if (draft) rl.write(draft.replace(/\n/g, " "));
+  if (!process.stdin.isTTY) return new Promise((resolve) => { // piped input: plain readline
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+    rl.on("close", () => resolve(null));
+    rl.question(q, (a) => { askedRows = 1; rl.close(); resolve(a); });
+  });
+  const shortcode = /(^|[^\w:]):([a-z0-9_+-]+)$/;
+  const common = (xs: string[]) => xs.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); });
+  const ed: Editor = new Editor({
+    prompt: q,
+    // Rows end where replies do: the reply column is PAD + textWidth wide, and input starts after the prompt.
+    width: () => Math.max(10, textWidth() - (width(q) - PAD.length)),
+    history,
+    initial: rude_.call("ui/take-draft"), // typed during the turn but not sent
+    write,
+    // :coffee: → ☕ as the closing colon is typed.
+    typed: (before) => {
+      const m = before.match(/(^|[^\w:]):([a-z0-9_+-]+):$/), e = m && EMOJI.get(m[2]);
+      return e ? { del: m![2].length + 2, ins: e } : undefined;
+    },
+    // Tab: the transcript on an empty line; otherwise complete an emoji shortcode or a /command.
+    // Candidates show in the row under the input.
+    tab: (before) => {
+      if (!ed?.text) return "transcript";
+      const m = before.match(shortcode);
+      if (m) {
+        const names = emojiNames(m[2]);
+        if (names.length === 1) return { del: m[2].length + 1, ins: EMOJI.get(names[0])! };
+        if (!names.length) return { hint: PAD + grey(`no emoji :${m[2]}`) };
+        const hint = fit(PAD + names.slice(0, 20).map((n) => `${EMOJI.get(n)} ${grey(n)}`).join("  "), cols() - 1);
+        const c = common(names);
+        return c.length > m[2].length ? { del: m[2].length, ins: c, hint } : { hint };
+      }
+      if (/^\/\S*$/.test(before) && before === ed.text) {
+        const names = rude_.apropos("command/").map((c) => c.name).filter((n) => n.startsWith("command/"))
+          .map((n) => "/" + n.slice("command/".length)).filter((n) => n.startsWith(before)).sort();
+        if (names.length === 1) return { del: before.length, ins: names[0] + " " };
+        if (!names.length) return { hint: PAD + grey(`no command starts with ${before}`) };
+        const hint = fit(PAD + names.map((n) => accent(n)).join("  "), cols() - 1), c = common(names);
+        return c.length > before.length ? { del: before.length, ins: c, hint } : { hint };
+      }
+    },
+  });
+  editing = ed;
+  // Bracketed paste, so pasted newlines don't send; in tmux, modifyOtherKeys so Shift-Enter differs from Enter.
+  write("\x1b[?2004h" + MOK_ON);
+  keys((s, k) => {
+    const whole = reassemble(s, k);
+    if (whole === "swallow") return;
+    const seq = whole ?? k?.sequence;
+    if (NEWLINE_KEYS.includes(seq)) return ed.key(undefined, {}, true);
+    if (!whole) ed.key(s, k);
+  });
+  return ed.result.then((r) => {
+    editing = null;
+    keys(null);
+    write("\x1b[?2004l" + MOK_OFF);
+    if (r === "transcript") return TAB;
+    if (r === null) return null;
+    askedRows = r.rows;
+    return r.text;
   });
 }
 
@@ -420,6 +456,8 @@ export default (rude: Rude) => {
   rude.def("ui/tool-view", (use: { name: string; input: any }): ToolView =>
     rude.call(has(`ui/tool/${use.name}`) ? `ui/tool/${use.name}` : "ui/tool", use.input ?? {}, use.name),
     "How one tool call looks: ui/tool/<name> if the tool has one, else ui/tool.");
+  rude.def("ui/spinner", (t: number) => spinner(t),
+    "The animation at the left of the status line, given the time in ms. Advise it to draw your own.");
   rude.def("ui/status", () => status(), "The status line during a turn: animation, what it's doing, elapsed time, hints.");
   rude.defdefault("ui/next-input", (): string | null => null,
     "Before showing the prompt: a message to send instead, e.g. one queued during the last turn. null shows the prompt.");
@@ -449,11 +487,16 @@ export default (rude: Rude) => {
       wrap(grey(c.doc.split("\n")[0]), textWidth(), accent("/" + c.name.slice("command/".length).padEnd(10)) + " ").map(pad)));
   }, "List the slash commands.");
 
+  rude.defdefault("ui/thinking-verbs", (): string[] => VERBS,
+    "What the status line says while the model thinks; one is picked each stretch. Advise to add your own.");
   rude.defdefault("ui/prompt-rule", rule, "The line printed above the prompt: a grey rule labelled with the model and context size.");
 
   rude.def("main", async (argv: string[]) => {
-    if (tty) process.on("exit", () => write((S.alt ? "\x1b[?1049l" : "") + "\x1b[?25h\x1b[?2004l\x1b[>4;0m"));
-    process.stdout.on("resize", () => { S.rule = null; if (S.turn) redraw(); });
+    if (tty) process.on("exit", () => write((S.alt ? "\x1b[?1049l" : "") + "\x1b[?25h\x1b[?2004l" + MOK_OFF));
+    process.stdout.on("resize", () => { S.rule = null; if (S.turn) redraw(); editing?.render(); });
+    // Interactive: start on a clean screen. Only the visible part is cleared; the shell's
+    // earlier output is still in the scrollback.
+    if (tty && process.stdin.isTTY && !argv.includes("-p")) write("\x1b[H\x1b[2J\n"); // one blank row on top
     const args = [...argv];
     const flag = (...names: string[]) => {
       const i = args.findIndex((a) => names.includes(a));
