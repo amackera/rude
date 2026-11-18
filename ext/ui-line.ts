@@ -5,7 +5,7 @@
 //
 // It only watches: streamed text via stream-delta, and the rest via advice on
 // prompt, run-tool, compact and append-entry. Hooks for other extensions:
-// command/<name>, ui/tool/<name>, ui/print, ui/say, ui/live, key/<name>.
+// command/<name>, ui/tool/<name>, ui/print, ui/say, ui/live, ui/reply-tail, key/<name>.
 import type { Rude, Entry } from "../core.ts";
 import { createInterface, emitKeypressEvents } from "node:readline";
 import { basename } from "node:path";
@@ -94,7 +94,7 @@ function status() {
 function liveLines() {
   const w = textWidth();
   const out: string[] = [];
-  if (S.text && !S.compacting) out.push(...S.md.peek(S.text, w).map(pad));
+  if (!S.compacting) out.push(...rude_.call("ui/reply-tail", S.text, w, S.md).map(pad));
   const extra: string[] = rude_.call("ui/live", w);
   if (extra.length) out.push("", ...extra);
   // The bottom looks like it does at the prompt: a blank, the rule, then the status where the prompt was.
@@ -428,6 +428,10 @@ export default (rude: Rude) => {
     "Print lines into the scrollback, above the live region. Extensions should print with this, not console.log, " +
     "which would scribble over the live region. Lines are written as given (no margin); runs of blank lines collapse.");
   rude.def("ui/say", (text: string) => say(text), "Print text into the scrollback, indented to the UI's margin.");
+  rude.def("ui/reply-tail", (text: string, w: number, md: Markdown): string[] => (text ? md.peek(text, w) : []),
+    "The unfinished end of the reply, as lines for the live region: (text, width, md). md renders markdown in the " +
+    "reply's current state; md.peek doesn't change it. Called every frame, even with no text; advise it to draw your own.");
+
   rude.defdefault("ui/live", (_width: number): string[] => [],
     "Extra lines for the live region during a turn, shown above the rule and status. Advise it to add your own.");
 
