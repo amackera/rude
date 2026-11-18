@@ -3,9 +3,21 @@ import { join } from "node:path";
 
 const LIMIT = 30_000;
 
-// Keep the start and end of long output; the middle is usually noise.
-const clip = (s: string) =>
-  s.length <= LIMIT ? s : `${s.slice(0, LIMIT / 2)}\n\n[... ${s.length - LIMIT} chars cut ...]\n\n${s.slice(-LIMIT / 2)}`;
+// Drain output continuously while retaining only a bounded head and tail.
+async function output(stream: ReadableStream<Uint8Array>) {
+  const decoder = new TextDecoder();
+  let head = "", tail = "", total = 0;
+  const keep = (text: string) => {
+    total += text.length;
+    const n = Math.min(LIMIT / 2 - head.length, text.length);
+    head += text.slice(0, n);
+    tail = (tail + text.slice(n)).slice(-LIMIT / 2);
+  };
+  for await (const chunk of stream) keep(decoder.decode(chunk, { stream: true }));
+  keep(decoder.decode());
+  return total <= LIMIT ? head + tail
+    : `${head}\n\n[... ${total - LIMIT} chars cut ...]\n\n${tail}`;
+}
 
 // Each command runs in its own process group, so killing it kills everything it
 // started. Commands still running when rude exits are killed the same way.
@@ -34,15 +46,24 @@ export default (rude: Rude) => {
     const signal: AbortSignal | undefined = rude.call("signal");
     const onCancel = () => killGroup(p.pid);
     signal?.addEventListener("abort", onCancel);
-    const out = await new Response(p.stdout).text();
-    await p.exited;
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onCancel);
-    running.delete(p.pid);
+    let out: string;
+    try {
+      if (signal?.aborted) onCancel();
+      out = await output(p.stdout);
+      await p.exited;
+    } catch (error) {
+      killGroup(p.pid);
+      await p.exited;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onCancel);
+      running.delete(p.pid);
+    }
     const status = timedOut ? `killed after ${timeout}s timeout`
       : signal?.aborted ? "cancelled by the user"
       : p.signalCode ? `killed by ${p.signalCode}` : `exit ${p.exitCode}`;
-    return `${clip(out)}\n[${status}]`;
+    return `${out}\n[${status}]`;
   },
   "Run a bash command in the working directory. Returns combined stdout and stderr plus the exit status. " +
   "Long output is cut in the middle. Don't start servers or watchers in the foreground; they block until the timeout.",

@@ -44,6 +44,7 @@ export default (rude: Rude) => {
       messages: addText(messages, ask), tool_choice: { type: "none" },
     });
     const summary = res.content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n");
+    if (res.stop_reason !== "end_turn" || !summary.trim()) throw new Error("compaction: model did not return a complete, nonempty summary");
     // Keep the longest recent stretch that fits the budget. It has to start at a
     // plain user message: one holding tool results would lose its tool calls.
     // Keep at most half of what is being compacted, so compacting always shrinks the context.

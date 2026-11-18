@@ -22,21 +22,26 @@ async function collect(events: AsyncIterable<any>, onDelta: (d: { type: string; 
   const content: any[] = [];
   const json: string[] = [];
   let stop_reason: string | null = null, usage: any = {}, model = "";
+  let started = false, finished = false;
+  const open = new Set<number>();
   for await (const e of events) {
-    if (e.type === "message_start") ({ usage = {}, model = "" } = e.message);
-    else if (e.type === "content_block_start") { content[e.index] = { ...e.content_block }; json[e.index] = ""; }
+    if (e.type === "message_start") { started = true; ({ usage = {}, model = "" } = e.message); }
+    else if (e.type === "content_block_start") { open.add(e.index); content[e.index] = { ...e.content_block }; json[e.index] = ""; }
     else if (e.type === "content_block_delta") {
       const b = content[e.index], d = e.delta;
       if (d.type === "text_delta") { b.text += d.text; onDelta({ type: "text", text: d.text }); }
       else if (d.type === "thinking_delta") { b.thinking += d.thinking; onDelta({ type: "thinking", text: d.thinking }); }
-      else if (d.type === "signature_delta") b.signature = d.signature;
+      else if (d.type === "signature_delta") b.signature = (b.signature ?? "") + d.signature;
       else if (d.type === "input_json_delta") json[e.index] += d.partial_json;
     } else if (e.type === "content_block_stop") {
+      open.delete(e.index);
       const b = content[e.index];
       if (b.type === "tool_use") b.input = json[e.index] ? JSON.parse(json[e.index]) : {};
     } else if (e.type === "message_delta") { stop_reason = e.delta.stop_reason ?? stop_reason; usage = { ...usage, ...e.usage }; }
+    else if (e.type === "message_stop") { finished = true; break; }
     else if (e.type === "error") throw new Error(`anthropic: ${e.error.type}: ${e.error.message}`);
   }
+  if (!started || !finished || !stop_reason || open.size) throw new Error("anthropic: incomplete response stream");
   return { content: content.filter(Boolean), stop_reason, usage, model };
 }
 

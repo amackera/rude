@@ -215,3 +215,90 @@ test("defdefault never clobbers another file's def, even when its own file reloa
   await rude.load(other);
   expect(rude.call("later")).toBe("base!");
 });
+
+test("bash retains bounded output with an exact head and tail", async () => {
+  const result = await rude.call("tool/bash", {
+    command: `printf HEAD; head -c 2000000 /dev/zero | tr '\\0' x; printf TAIL`,
+  });
+  expect(result.startsWith("HEAD")).toBe(true);
+  expect(result.endsWith("TAIL\n[exit 0]")).toBe(true);
+  expect(result).toContain("[... 1970008 chars cut ...]");
+  expect(result.length).toBeLessThan(30100);
+  expect(await rude.call("tool/bash", { command: "printf 'hello 🌲'" })).toBe("hello 🌲\n[exit 0]");
+});
+
+test("snapshot restores filenames containing Git quoting characters", async () => {
+  const repo = mkdtempSync(join(tmpdir(), "rude-snap-names-"));
+  const cwd = process.cwd();
+  process.chdir(repo);
+  try {
+    Bun.spawnSync(["git", "init", "-q"]);
+    await rude.load(ext("snapshot.ts"));
+    rude.def("snapshot/git-dir", () => repo + "-snapshots.git");
+    rude.call("new-session");
+    const names = ["line\nbreak", "tab\tname", 'quote"name', "back\\slash", "日本語"];
+    for (const name of names) writeFileSync(name, "original");
+    const before = await rude.call("snapshot");
+    for (const name of names) writeFileSync(name, "changed");
+    const added = names.map((name) => "added-" + name);
+    for (const name of added) writeFileSync(name, "new");
+    const restored = await rude.call("snapshot/restore", before.tree);
+    expect(restored.sort()).toEqual([...names, ...added].sort());
+    for (const name of names) expect(readFileSync(name, "utf8")).toBe("original");
+    for (const name of added) expect(existsSync(name)).toBe(false);
+  } finally {
+    process.chdir(cwd);
+    for (const [name, id] of [["build-context", "snapshot"], ["prompt", "snapshot"], ["branch", "snapshot"]]) rude.unadvise(name, id);
+  }
+});
+
+test("provider rejects truncated streams and joins signature chunks", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.ANTHROPIC_API_KEY;
+  await rude.load(ext("anthropic.ts"));
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  const events = [
+    { type: "message_start", message: { model: "test", usage: {} } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "first" } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "second" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" } },
+    { type: "message_stop" },
+  ];
+  const respond = (xs: any[]) => {
+    globalThis.fetch = (async () => new Response(xs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""))) as typeof fetch;
+  };
+  const ctx = { system: "", tools: [], messages: [] };
+  try {
+    for (const truncated of [[], events.slice(0, 4), events.slice(0, -1), events.filter((e) => e.type !== "content_block_stop")]) {
+      respond(truncated);
+      await expect(rude.call("send-request", ctx)).rejects.toThrow("incomplete response stream");
+    }
+    respond(events);
+    const result = await rude.call("send-request", ctx);
+    expect(result.content[0].signature).toBe("firstsecond");
+    expect(result.stop_reason).toBe("end_turn");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = originalKey;
+  }
+});
+
+test("failed compaction preserves the previous context", async () => {
+  await rude.load(ext("compact.ts"));
+  rude.call("new-session");
+  rude.call("append-entry", { type: "message", message: { role: "user", content: "keep this" } });
+  const before = rude.call("path");
+  try {
+    for (const response of [done("   "), { ...done("partial summary"), stop_reason: "max_tokens" }, { content: [], stop_reason: "end_turn" }]) {
+      script([response]);
+      await expect(rude.call("compact")).rejects.toThrow("complete, nonempty summary");
+      expect(rude.call("path")).toEqual(before);
+      expect(rude.call("compacted-messages", rude.call("path"))).toEqual([{ role: "user", content: "keep this" }]);
+    }
+  } finally {
+    rude.unadvise("build-context", "compact");
+  }
+});

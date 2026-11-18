@@ -16,7 +16,7 @@ async function run(cmd: string[], cwd = process.cwd()) {
   const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   await p.exited;
-  return { code: p.exitCode, out: out.trim(), err: err.trim() };
+  return { code: p.exitCode, out: out, err: err.trim() };
 }
 
 export default (rude: Rude) => {
@@ -25,7 +25,7 @@ export default (rude: Rude) => {
   rude.def("snapshot/root", async () => {
     if (root === undefined) {
       const r = await run(["git", "rev-parse", "--show-toplevel"]);
-      root = r.code === 0 ? r.out : null;
+      root = r.code === 0 ? r.out.trimEnd() : null;
     }
     return root;
   }, "The git work tree whose files are snapshotted, or null when not in a git repo.");
@@ -41,7 +41,7 @@ export default (rude: Rude) => {
     }
     const r = await run(["git", "--git-dir", dir, "--work-tree", top, ...args], top);
     if (r.code !== 0) throw new Error(`snapshot: git ${args[0]}: ${r.err}`);
-    return r.out;
+    return args[0] === "diff-tree" ? r.out : r.out.trim();
   };
 
   const lastSnapshot = (path: Entry[]) => path.findLast((e) => e.type === "snapshot");
@@ -61,11 +61,11 @@ export default (rude: Rude) => {
     const now = await git(top, "write-tree");
     if (now === tree) return [];
     // Files that exist now but not in the snapshot get deleted; the rest are rewritten.
-    const added = (await git(top, "diff-tree", "-r", "--name-only", "--diff-filter=A", tree, now)).split("\n").filter(Boolean);
+    const added = (await git(top, "diff-tree", "-r", "--name-only", "-z", "--diff-filter=A", tree, now)).split("\0").filter(Boolean);
     for (const f of added) rmSync(join(top, f), { force: true });
     await git(top, "read-tree", tree);
     await git(top, "checkout-index", "-a", "-f");
-    return (await git(top, "diff-tree", "-r", "--name-only", tree, now)).split("\n").filter(Boolean);
+    return (await git(top, "diff-tree", "-r", "--name-only", "-z", tree, now)).split("\0").filter(Boolean);
   }, "Make the project's files match a snapshot tree. Returns the paths that changed.");
 
   rude.advise("build-context", "snapshot", async (next) => {
