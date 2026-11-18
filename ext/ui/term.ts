@@ -45,7 +45,9 @@ export const PAD = "  ";
 export const BOTTOM = 1; // blank rows kept under the prompt and the status, off the bottom edge
 export const cols = () => process.stdout.columns || 80;
 export const rows = () => process.stdout.rows || 24;
-export const textWidth = () => Math.max(20, Math.min(cols() - 2 * PAD.length, 100));
+export const textWidth = () => Math.max(20, Math.min(cols() - 2 * PAD.length, 100)); // replies: capped, for readability
+/** Columns for typed input after a prompt `promptWidth` wide: the whole window, less the right margin. */
+export const inputWidth = (promptWidth: number) => Math.max(10, cols() - promptWidth - PAD.length);
 export const write = (s: string) => process.stdout.write(s);
 export const pad = (l: string) => (l ? PAD + l : "");
 export const SYNC = ["\x1b[?2026h", "\x1b[?2026l"]; // synchronized output: no tearing

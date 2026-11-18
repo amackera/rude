@@ -7,7 +7,7 @@
 // status area: it wraps, moves by word, recalls history, and expands :emoji:.
 import type { Rude } from "../core.ts";
 import { grey, accent, fit } from "./ui/markdown.ts";
-import { PAD, tty, textWidth } from "./ui/term.ts";
+import { PAD, tty, inputWidth } from "./ui/term.ts";
 import { Editor } from "./ui/editor.ts";
 import { shortcodeEdit } from "./ui/emoji.ts";
 
@@ -18,7 +18,7 @@ st.history ??= [];
 export default (rude: Rude) => {
   const editor = (initial = "") => new Editor({
     prompt: PAD + accent("› "),
-    width: () => Math.max(10, textWidth() - 2),
+    width: () => inputWidth(PAD.length + 2),
     history: st.history,
     initial,
     typed: shortcodeEdit,

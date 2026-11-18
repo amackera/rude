@@ -14,7 +14,7 @@ import { EMOJI, emojiNames, shortcodeEdit } from "./ui/emoji.ts";
 import { Editor } from "./ui/editor.ts";
 import { Markdown, wrap, fit, width, red, green, grey, accent } from "./ui/markdown.ts";
 import {
-  S, tty, PAD, BOTTOM, cols, rows, textWidth, write, pad, begin, end, HIDE, SHOW, isBlank, plain, plural, elapsed,
+  S, tty, PAD, BOTTOM, cols, rows, textWidth, inputWidth, write, pad, begin, end, HIDE, SHOW, isBlank, plain, plural, elapsed,
   rel, toText, spinner, shimmer, type Step, type ToolView,
 } from "./ui/term.ts";
 
@@ -279,8 +279,7 @@ function ask(q: string): Promise<string | null | typeof TAB> {
   const common = (xs: string[]) => xs.reduce((a, b) => { let i = 0; while (i < a.length && a[i] === b[i]) i++; return a.slice(0, i); });
   const ed: Editor = new Editor({
     prompt: q,
-    // Rows end where replies do: the reply column is PAD + textWidth wide, and input starts after the prompt.
-    width: () => Math.max(10, textWidth() - (width(q) - PAD.length)),
+    width: () => inputWidth(width(q)),
     history,
     initial: rude_.call("ui/take-draft"), // typed during the turn but not sent
     write,
