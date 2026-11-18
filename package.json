@@ -1,0 +1,17 @@
+{
+  "name": "@amackera/rude",
+  "version": "0.1.0",
+  "description": "A rudimentary coding agent: a small core of named functions, everything else is extensions",
+  "license": "MIT",
+  "author": "Anson MacKeracher",
+  "repository": { "type": "git", "url": "git+https://github.com/amackera/rude.git" },
+  "homepage": "https://github.com/amackera/rude",
+  "bugs": "https://github.com/amackera/rude/issues",
+  "keywords": ["agent", "coding-agent", "claude", "anthropic", "cli", "bun"],
+  "type": "module",
+  "bin": { "rude": "core.ts" },
+  "files": ["core.ts", "ext/", "README.md", "LICENSE"],
+  "engines": { "bun": ">=1.3" },
+  "scripts": { "test": "bun test" },
+  "publishConfig": { "access": "public" }
+}
