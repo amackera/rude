@@ -2,11 +2,14 @@
 
 A rudimentary coding agent.
 
+> [!WARNING]
+> rude is an experimental research project, built to explore how small an extensible coding agent can be. It is not intended for production use: there are no stability guarantees (the extension API and session format may change without notice), no sandboxing, and no support.
+
 ![rude explaining what it is, then writing itself an extension that swaps its loading animation for a bouncing coffee cup](https://raw.githubusercontent.com/amackera/rude/master/docs/demo.gif)
 
 The entire program is a table of named functions, all of which can be replaced with `def` or wrapped with `advise`. That's the extension API. Config lives in `~/.rude/init.ts`.
 
-It's a small thing for playing with and learning from, not a hardened tool. **It runs whatever shell commands the model chooses, without asking first**, in the directory you start it in. Use it somewhere you're happy to have changed. **Only run it in repositories you trust:** it automatically executes project-local `.rude/*.ts` extensions at startup, including for `rude doc` and `rude apropos`, before making any model request.
+It's for playing with and learning from, not a hardened tool. **It runs whatever shell commands the model chooses, without asking first**, in the directory you start it in. Use it somewhere you're happy to have changed. **Only run it in repositories you trust:** it automatically executes project-local `.rude/*.ts` extensions at startup, including for `rude doc` and `rude apropos`, before making any model request.
 
 Needs [Bun](https://bun.sh) 1.3 and an [Anthropic API key](https://console.anthropic.com/). There are no other dependencies. Developed and tested on macOS, in Ghostty and tmux. Linux should work but is untested; Windows won't, since it relies on bash and Unix process groups. Newer Bun versions are untested too: Esc handling reaches into Bun's readline internals.
 
